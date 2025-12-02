@@ -13,7 +13,7 @@ export const login = async (email, password) => {
     const response = await axios.post('http://localhost:5000/api/login', { email, password });
     user.set(response.data);
     isAuthenticated.set(true);
-    return { success: true };
+    return { success: true, user: response.data };
   } catch (error) {
     const message = error.response?.data?.error || 'Login failed';
     return { success: false, error: message };
@@ -49,7 +49,7 @@ export const checkAuth = async () => {
     const response = await axios.get('http://localhost:5000/api/me');
     user.set(response.data);
     isAuthenticated.set(true);
-  } catch {
+  } catch (error) {
     user.set(null);
     isAuthenticated.set(false);
   }

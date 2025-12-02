@@ -1,50 +1,190 @@
 # backend/routes/grants.py
-from flask import Blueprint, request, jsonify
-from services.grant_service import GrantService
+from flask import Blueprint, request, jsonify, session
+from flask_cors import CORS
 from datetime import datetime
+from models import db, Grant, BudgetCategory, User, AuditLog
 
 grants_bp = Blueprint('grants', __name__)
 
 @grants_bp.route('/grants', methods=['POST'])
 def create_grant():
     """
-    Create a new grant
-    Expects: { "title": "...", "funder": "...", "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD", "total_budget": ... }
-    Returns: grant object or error
+    Create a new grant — only for logged-in PIs.
+    Expects multipart/form-data with fields and files.
     """
+    # 1. Verify user is authenticated
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    user = User.query.get(user_id)
+    if not user or user.role != 'PI':
+        return jsonify({'error': 'Only PIs can create grants'}), 403
+
     try:
-        data = request.get_json() or {}
+        from services.grant_service import GrantService
         
-        # Parse dates
-        start_date = datetime.strptime(data.get('start_date'), '%Y-%m-%d').date()
-        end_date = datetime.strptime(data.get('end_date'), '%Y-%m-%d').date()
-        
-        # Call service
-        grant = GrantService.create_grant(
-            title=data.get('title'),
-            funder=data.get('funder'),
-            start_date=start_date,
-            end_date=end_date,
-            total_budget=float(data.get('total_budget', 0)),
-            pi_id=data.get('pi_id')  # Optional, will use first PI if not provided
-        )
+        # 2. Delegate to Service
+        # We pass request.form (for text fields) and request.files (for file uploads)
+        grant = GrantService.create_grant(request.form, request.files, user_id)
+
         return jsonify(grant.to_dict()), 201
-        
+
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
-    except KeyError as e:
-        return jsonify({'error': f'Missing required field: {str(e)}'}), 400
     except Exception as e:
-        return jsonify({'error': 'Server error', 'details': str(e)}), 500
+        print(f"Grant creation error: {str(e)}")  # For debugging
+        return jsonify({'error': 'Failed to create grant', 'details': str(e)}), 500
+
+@grants_bp.route('/grants/<int:grant_id>/approve', methods=['PUT'])
+def approve_grant(grant_id):
+    """
+    Approve a grant (RSU Only).
+    """
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    user = User.query.get(user_id)
+    if not user or user.role != 'RSU':
+        return jsonify({'error': 'Only RSU Admins can approve grants'}), 403
+
+    try:
+        from services.grant_service import GrantService
+        grant = GrantService.approve_grant(grant_id, user_id)
+        return jsonify({'message': 'Grant approved successfully', 'grant': grant.to_dict()}), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        print(f"Error approving grant: {str(e)}")
+        return jsonify({'error': 'Failed to approve grant'}), 500
 
 @grants_bp.route('/grants', methods=['GET'])
-def get_grants():
-    """
-    Get all grants
-    Returns: list of grant objects
-    """
+def list_grants():
+    """Get all grants for the current user."""
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
     try:
-        grants = GrantService.get_all_grants()
-        return jsonify([g.to_dict() for g in grants]), 200
+        from services.grant_service import GrantService
+        grants = GrantService.get_grants_for_user(user_id)
+        return jsonify(grants), 200
     except Exception as e:
         return jsonify({'error': 'Failed to fetch grants', 'details': str(e)}), 500
+
+@grants_bp.route('/pi-grants-budget', methods=['GET'])
+def get_pi_grants_budget():
+    """
+    Get all grants for the logged-in PI, specifically for the budget control room.
+    Includes budget categories and spent percentages.
+    """
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    user = User.query.get(user_id)
+    if not user or user.role != 'PI':
+        return jsonify({'error': 'Only PIs can view budget data'}), 403
+
+    try:
+        from services.grant_service import GrantService
+        # The get_grants_for_user method already filters by PI and includes necessary details
+        grants_data = GrantService.get_grants_for_user(user_id)
+        
+        # Calculate summary statistics for the overview cards
+        total_allocated = sum(g['total_budget'] for g in grants_data)
+        total_spent = sum(g['total_budget'] * g['spent_percent'] / 100 for g in grants_data)
+        
+        avg_burn = 0
+        if total_allocated > 0:
+            avg_burn = round((total_spent / total_allocated) * 100, 1)
+
+        # Count active funders (unique funders)
+        active_funders = len(set(g['funder'] for g in grants_data))
+
+        # Count ethics-protected projects (assuming ethical_approval_filename indicates protection)
+        ethics_protected_projects = sum(1 for g in grants_data if g.get('ethical_approval_filename'))
+
+
+        return jsonify({
+            'grants': grants_data,
+            'summary': {
+                'total_allocated': total_allocated,
+                'total_spent': total_spent,
+                'avg_burn': avg_burn,
+                'active_funders': active_funders,
+                'ethics_protected_projects': ethics_protected_projects
+            }
+        }), 200
+    except Exception as e:
+        print(f"Error fetching PI grants budget: {str(e)}")
+        return jsonify({'error': 'Failed to fetch PI grants budget', 'details': str(e)}), 500
+
+# --- Grant Team Management Routes ---
+@grants_bp.route('/grants/<int:grant_id>/team', methods=['POST'])
+def add_team_member_to_grant(grant_id):
+    """
+    Add a user as a team member to a specific grant. Only PI of the grant can do this.
+    """
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    try:
+        from services.grant_team_service import GrantTeamService # Import GrantTeamService
+        data = request.get_json()
+        member_user_id = data.get('user_id')
+        role = data.get('role')
+
+        new_team_member_entry = GrantTeamService.add_team_member_to_grant(
+            grant_id, member_user_id, role, user_id
+        )
+        return jsonify(new_team_member_entry.to_dict()), 201
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error adding team member to grant: {str(e)}")
+        return jsonify({'error': 'Failed to add team member'}), 500
+
+@grants_bp.route('/grants/<int:grant_id>/team', methods=['GET'])
+def get_team_members_for_grant(grant_id):
+    """
+    Get all team members for a specific grant. Accessible by PI of the grant or RSU.
+    """
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    try:
+        from services.grant_team_service import GrantTeamService
+        team_members = GrantTeamService.get_team_members_for_grant(grant_id, user_id)
+        return jsonify(team_members), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        print(f"Error fetching team members for grant: {str(e)}")
+        return jsonify({'error': 'Failed to fetch team members'}), 500
+
+@grants_bp.route('/grants/<int:grant_id>/team/<int:member_user_id>', methods=['DELETE'])
+def remove_team_member_from_grant(grant_id, member_user_id):
+    """
+    Remove a team member from a specific grant. Only PI of the grant can do this.
+    """
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    try:
+        from services.grant_team_service import GrantTeamService
+        result = GrantTeamService.remove_team_member_from_grant(
+            grant_id, member_user_id, user_id
+        )
+        return jsonify(result), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error removing team member from grant: {str(e)}")
+        return jsonify({'error': 'Failed to remove team member'}), 500
