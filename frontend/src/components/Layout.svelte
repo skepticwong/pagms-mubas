@@ -263,6 +263,15 @@
             <span>User Management</span>
           </span>
         </button>
+        <button
+          class="nav-btn"
+          on:click={() => router.goToRulesManagement()}
+        >
+          <span class="flex items-center gap-2">
+            <Icon name="setting" size={18} />
+            <span>Rules Engine</span>
+          </span>
+        </button>
         <div class="pt-2 border-t border-white/40"></div>
         <button class="nav-btn" on:click={() => router.goToReports()}>
           <span class="flex items-center gap-2">

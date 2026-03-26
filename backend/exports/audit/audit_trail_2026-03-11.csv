@@ -1,0 +1,66 @@
+ID,User,Action,Resource Type,Resource ID,Details,Timestamp (UTC)
+65,Dr. PI,report_generated,grant,2,"PI generated generic.docx Report for period Q4 2023 on grant ""Community Health Initiative""",2026-03-11T21:17:53.983286
+64,Dr. PI,EXPORT_AUDIT_LOG,audit_log,0,Exported audit trail as PDF (62 records),2026-03-11T19:44:04.354010
+63,Dr. PI,EXPORT_AUDIT_LOG,audit_log,0,Exported audit trail as PDF (61 records),2026-03-11T19:43:36.660454
+62,RSU Admin,grant_approved,grant,15,"Grant ""the sampler"" approved by RSU",2026-03-11T17:24:50.271323
+61,Dr. PI,grant_created,grant,15,"Grant ""the sampler"" initialized (Pending Approval)",2026-03-11T17:22:49.318921
+60,RSU Admin,BATCH_GENERATE_ANALYTICS,analytics,0,Batch generated analytics for 0/14 grants,2026-03-08T19:13:28.410857
+59,Dr. PI,grant_created,grant,14,"Grant ""Forced REC Demo Grant"" initialized (Pending Approval)",2026-03-08T00:21:41.767046
+58,RSU Admin,grant_approved,grant,13,"Grant ""testing"" approved by RSU",2026-03-08T00:04:53.502247
+57,Dr. PI,grant_created,grant,13,"Grant ""testing"" initialized (Pending Approval)",2026-03-07T23:54:35.583466
+56,Dr. PI,grant_created,grant,12,"Grant ""mararia"" initialized (Pending Approval)",2026-03-06T21:18:18.110368
+55,Dr. PI,grant_created,grant,11,"Grant ""mauni"" initialized (Pending Approval)",2026-03-06T21:14:19.041882
+54,Dr. PI,grant_created,grant,10,"Grant ""HJKKBKB"" initialized (Pending Approval)",2026-03-05T09:28:37.160603
+53,RSU Admin,grant_approved,grant,9,"Grant ""kjbkjbkbkj"" approved by RSU",2026-02-26T21:07:06.848771
+52,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,19,Created outcome indicator: ghhgghggg,2026-02-26T21:00:13.777862
+51,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,18,Created outcome indicator: hhfhfhfhfh,2026-02-26T21:00:13.453832
+50,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,17,Created outcome indicator: houssjjss,2026-02-26T21:00:13.140669
+49,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,16,Created outcome indicator: ghhgghggg,2026-02-26T20:58:34.514608
+48,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,15,Created outcome indicator: hhfhfhfhfh,2026-02-26T20:58:34.266736
+47,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,14,Created outcome indicator: houssjjss,2026-02-26T20:58:34.021603
+46,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,13,Created outcome indicator: ghhgghggg,2026-02-26T20:18:58.615549
+45,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,12,Created outcome indicator: hhfhfhfhfh,2026-02-26T20:18:57.857778
+44,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,11,Created outcome indicator: houssjjss,2026-02-26T20:18:57.477376
+43,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,10,Created outcome indicator: ghhgghggg,2026-02-26T18:48:31.662395
+42,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,9,Created outcome indicator: hhfhfhfhfh,2026-02-26T18:48:30.905699
+41,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,8,Created outcome indicator: houssjjss,2026-02-26T18:48:30.175916
+40,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,7,Created outcome indicator: ghhgghggg,2026-02-26T18:46:15.324508
+39,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,6,Created outcome indicator: hhfhfhfhfh,2026-02-26T18:46:14.591746
+38,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,5,Created outcome indicator: houssjjss,2026-02-26T18:46:13.858250
+37,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,4,Created outcome indicator: ghhgghggg,2026-02-26T18:44:59.801975
+36,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,3,Created outcome indicator: hhfhfhfhfh,2026-02-26T18:44:59.070975
+35,Dr. PI,CREATE_OUTCOME_INDICATOR,OutcomeIndicator,2,Created outcome indicator: houssjjss,2026-02-26T18:44:58.169159
+34,RSU Admin,budget_amended,grant,2,Amendment 1: 2000.0 from Personnel to Supplies. ,2026-02-23T20:36:57.155727
+33,Dr. PI,effort_certified,task,12,Certified 56h for Team Member (Amount: 0 USD),2026-02-22T22:05:50.272326
+32,Team Member,evidence_submitted,task,12,"Evidence submitted for task ""nnnnnnnnnn"" by Team Member from IP: 127.0.0.1",2026-02-22T22:05:36.077375
+31,Dr. PI,task_created,task,12,"Task ""nnnnnnnnnn"" assigned to Team Member for grant ""Research on Climate Change Impact"" from IP: 127.0.0.1",2026-02-22T22:04:00.088989
+30,Dr. PI,task_created,task,11,"Task ""iifvhdddddddddddddd hvfvfvdjvfjfhv dhdfhdfhd"" assigned to Team Member for grant ""Research on Climate Change Impact"" from IP: 127.0.0.1",2026-02-22T19:55:58.907311
+29,Dr. PI,task_created,task,10,"Task ""get soil samples"" assigned to Team Member for grant ""Community Health Initiative"" from IP: 127.0.0.1",2026-02-16T07:02:50.767159
+28,Dr. PI,task_deleted,task,4,Task deleted by PI from IP: 127.0.0.1,2026-02-15T18:12:21.762190
+27,Dr. PI,task_deleted,task,3,Task deleted by PI from IP: 127.0.0.1,2026-02-15T18:12:17.506055
+26,Dr. PI,task_deleted,task,7,Task deleted by PI from IP: 127.0.0.1,2026-02-15T18:12:12.699354
+25,Team Member,expense_submitted,expense,4,Encumbered $8888.00,2026-02-13T19:23:36.070539
+24,Dr. PI,effort_certified,task,3,Certified 2h for Team Member (Amount: 15000.0 USD),2026-02-13T09:56:41.959382
+23,Dr. PI,effort_certified,task,9,Certified 6h for Team Member (Amount: 45000.0 USD),2026-02-13T09:56:30.646832
+22,Team Member,evidence_submitted,task,9,"Evidence submitted for task ""99huhh"" by Team Member from IP: 127.0.0.1",2026-02-13T09:55:57.997529
+21,Dr. PI,task_created,task,9,"Task ""99huhh"" assigned to Team Member for grant ""Community Health Initiative"" from IP: 127.0.0.1",2026-02-13T09:55:21.394768
+20,Team Member,evidence_resubmitted,task,3,"Evidence resubmitted for task ""jjjj"" by Team Member from IP: 127.0.0.1",2026-02-12T16:19:39.239875
+19,Team Member,evidence_submitted,task,8,"Evidence submitted for task ""conduct a soil sample in mangochi"" by Team Member from IP: 127.0.0.1",2026-02-12T16:05:32.099938
+18,Dr. PI,task_created,task,8,"Task ""conduct a soil sample in mangochi"" assigned to Team Member for grant ""Community Health Initiative"" from IP: 127.0.0.1",2026-02-12T16:04:18.233625
+17,Dr. PI,task_deleted,task,1,Task deleted by PI from IP: 127.0.0.1,2026-02-12T16:03:51.395415
+16,Dr. PI,expense_submitted,expense,3,Submitted 50000.0 USD for Personnel (Grant: ERF-CC-2023-001),2026-02-12T16:02:44.741623
+15,Dr. PI,task_created,task,7,"Task ""67hjhdjshd"" assigned to Alice Team for grant ""Community Health Initiative"" from IP: 127.0.0.1",2026-02-12T15:47:47.093911
+14,Dr. PI,expense_submitted,expense,2,Submitted 7600.0 USD for Personnel (Grant: ERF-CC-2023-001),2026-02-12T15:30:19.156682
+13,Team Member,evidence_submitted,task,5,"Evidence submitted for task ""conduct soul sampling in blantyre "" by Team Member from IP: 127.0.0.1",2026-02-12T12:57:20.480586
+12,Team Member,evidence_submitted,task,6,"Evidence submitted for task ""zomba collect soil samples "" by Team Member from IP: 127.0.0.1",2026-02-12T11:52:00.112717
+11,Dr. PI,task_created,task,6,"Task ""zomba collect soil samples "" assigned to Team Member for grant ""Community Health Initiative"" from IP: 127.0.0.1",2026-02-12T11:51:26.374226
+10,Dr. PI,task_created,task,5,"Task ""conduct soul sampling in blantyre "" assigned to Team Member for grant ""Research on Climate Change Impact"" from IP: 127.0.0.1",2026-02-09T21:02:40.612618
+9,RSU Admin,grant_approved,grant,2,"Grant ""Community Health Initiative"" approved by RSU",2026-02-09T13:29:55.337798
+8,Team Member,evidence_submitted,task,4,"Evidence submitted for task ""kkj"" by Team Member from IP: 127.0.0.1",2026-02-09T13:19:31.858178
+7,Dr. PI,task_created,task,4,"Task ""kkj"" assigned to Team Member for grant ""Community Health Initiative"" from IP: 127.0.0.1",2026-02-09T13:19:04.457780
+6,Team Member,evidence_submitted,task,3,"Evidence submitted for task ""jjjj"" by Team Member from IP: 127.0.0.1",2026-02-09T12:51:06.409870
+5,Dr. PI,task_created,task,3,"Task ""jjjj"" assigned to Team Member for grant ""Community Health Initiative"" from IP: 127.0.0.1",2026-02-09T12:49:32.578417
+4,Team Member,evidence_submitted,task,2,"Evidence submitted for task ""tehgsjdhsgdjdjsdhdjhsd"" by Team Member from IP: 127.0.0.1",2026-02-09T09:20:26.726717
+3,Dr. PI,task_created,task,2,"Task ""tehgsjdhsgdjdjsdhdjhsd"" assigned to Team Member for grant ""Community Health Initiative"" from IP: 127.0.0.1",2026-02-09T09:19:46.197887
+2,Dr. PI,task_created,task,1,"Task ""conduct a soil sample in mangochi"" assigned to Alice Team for grant ""Community Health Initiative"" from IP: 127.0.0.1",2026-02-06T09:37:23.966032
+1,Dr. PI,expense_submitted,expense,1,Submitted 6700.0 USD for Supplies (Grant: GHA-CHI-2023-005),2026-02-05T23:36:46.676407

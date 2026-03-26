@@ -47,6 +47,7 @@ export const router = {
   goToReviewEvidence: () => set('review-evidence'),
   goToAuditTrail: () => set('audit-trail'),
   goToRSU: () => set('rsu'),
+  goToRulesManagement: () => set('rules-management'),
   goToDocuments: () => set('documents'),
   goToRoleHome: (role) => set(resolveLanding(role))
 };

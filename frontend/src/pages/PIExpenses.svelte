@@ -130,11 +130,11 @@
             formData.append("description", description);
             formData.append("receipt", receiptFile);
 
-            await axios.post("http://localhost:5000/api/expenses", formData, {
+            const res = await axios.post("http://localhost:5000/api/expenses", formData, {
                 headers: { "Content-Type": "multipart/form-data" },
             });
 
-            success = "Expense submitted successfully!";
+            success = res.data.message || "Expense submitted successfully!";
 
             // Reset form
             amount = "";
@@ -194,6 +194,7 @@
     function getStatusBadge(status) {
         const badges = {
             pending: "bg-amber-50 text-amber-700 border-amber-200",
+            awaiting_prior_approval: "bg-purple-50 text-purple-700 border-purple-200",
             approved: "bg-green-50 text-green-700 border-green-200",
             rejected: "bg-red-50 text-red-700 border-red-200",
         };
@@ -203,6 +204,7 @@
     function getStatusIcon(status) {
         const icons = {
             pending: "⏳",
+            awaiting_prior_approval: "🛡️",
             approved: "✅",
             rejected: "❌",
         };

@@ -10,6 +10,7 @@
   import Grants from "./pages/Grants.svelte";
   import Tasks from "./pages/Tasks.svelte";
   import PIExpenses from "./pages/PIExpenses.svelte";
+  import Expenses from "./pages/Expenses.svelte";
   import Effort from "./pages/Effort.svelte";
   import Reports from "./pages/Reports.svelte";
   import Notifications from "./pages/Notifications.svelte";
@@ -22,8 +23,10 @@
   import FinancialReports from "./pages/FinancialReports.svelte";
   import AuditTrail from "./pages/AuditTrail.svelte";
   import ReviewEvidence from "./pages/ReviewEvidence.svelte";
-  import AssignTasks from "./pages/AssignTasks.svelte"; // Import the new component
+  import AssignTasks from "./pages/AssignTasks.svelte"; // Import new component
   import Documents from "./pages/Documents.svelte";
+  import RSU from "./pages/RSU.svelte";
+  import RulesManagement from "./pages/RulesManagement.svelte";
 
   onMount(async () => {
     await checkAuth();
@@ -70,6 +73,8 @@
   <PendingExpenses />
 {:else if $router === "grant-budgets"}
   <GrantBudgets />
+{:else if $router === "budget"}
+  <GrantBudgets />
 {:else if $router === "approved-transactions"}
   <ApprovedTransactions />
 {:else if $router === "exchange-rates"}
@@ -82,6 +87,8 @@
   <ReviewEvidence />
 {:else if $router === "rsu"}
   <RSU />
+{:else if $router === "rules-management"}
+  <RulesManagement />
 {:else if $router === "documents"}
   <Documents />
 {/if}

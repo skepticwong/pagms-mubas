@@ -11,6 +11,8 @@
   let loading = true;
   let error = "";
   let tasks = [];
+  let grants = [];
+  let complianceHealth = "GREEN"; // GREEN, YELLOW, RED
   let metrics = [
     { label: "Active Grants", value: 0, accent: "text-blue-600" },
     { label: "Pending Tasks", value: 0, accent: "text-amber-600" },
@@ -54,6 +56,17 @@
         withCredentials: true,
       });
       tasks = response.data?.tasks || [];
+      
+      const grantsRes = await axios.get("http://localhost:5000/api/grants", {
+        withCredentials: true,
+      });
+      grants = grantsRes.data?.grants || [];
+      
+      // Determine overall compliance health (worst case of any grant)
+      if (grants.some(g => g.compliance_status === "RED")) complianceHealth = "RED";
+      else if (grants.some(g => g.compliance_status === "YELLOW")) complianceHealth = "YELLOW";
+      else complianceHealth = "GREEN";
+
       deriveInsights();
     } catch (err) {
       error =
@@ -198,6 +211,25 @@
             </p>
           </div>
         {/each}
+
+        <!-- Compliance Health Card -->
+        <div
+          class="bg-white/65 backdrop-blur-xl border border-white/60 rounded-2xl p-6 shadow-md flex flex-col justify-between"
+        >
+          <div>
+            <p class="text-sm text-gray-600">Compliance Health</p>
+            <div class="flex items-center gap-3 mt-2">
+              <div class="relative flex h-4 w-4">
+                <span class={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${complianceHealth === 'RED' ? 'bg-rose-400' : complianceHealth === 'YELLOW' ? 'bg-amber-400' : 'bg-emerald-400'}`}></span>
+                <span class={`relative inline-flex rounded-full h-4 w-4 ${complianceHealth === 'RED' ? 'bg-rose-500' : complianceHealth === 'YELLOW' ? 'bg-amber-500' : 'bg-emerald-500'}`}></span>
+              </div>
+              <p class={`text-xl font-bold ${complianceHealth === 'RED' ? 'text-rose-600' : complianceHealth === 'YELLOW' ? 'text-amber-600' : 'text-emerald-600'}`}>
+                {complianceHealth === 'RED' ? 'At Risk' : complianceHealth === 'YELLOW' ? 'Needs Attention' : 'Healthy'}
+              </p>
+            </div>
+          </div>
+          <p class="text-xs text-gray-500 mt-2">Based on latest automated rule checks</p>
+        </div>
       </section>
 
       <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">

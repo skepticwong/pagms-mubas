@@ -56,6 +56,11 @@ class Grant(db.Model):
     progress_reporting_frequency = db.Column(db.String(50))
     special_requirements = db.Column(db.Text)
     ethical_approval_filename = db.Column(db.String(200))
+    reporting_template_filename = db.Column(db.String(200))
+
+    # Rules Engine Links
+    rule_profile_id = db.Column(db.Integer, db.ForeignKey('rule_profiles.id'))
+    rule_snapshot_id = db.Column(db.Integer, db.ForeignKey('rule_profile_snapshots.id'))
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -90,6 +95,7 @@ class Grant(db.Model):
             'progress_reporting_frequency': self.progress_reporting_frequency,
             'special_requirements': self.special_requirements,
             'ethical_approval_filename': self.ethical_approval_filename,
+            'reporting_template_filename': self.reporting_template_filename,
             
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
@@ -290,6 +296,7 @@ class GrantTeam(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     role = db.Column(db.String(50), nullable=False) # e.g., 'Co-Investigator', 'Research Assistant'
     date_added = db.Column(db.DateTime, default=datetime.utcnow)
+    status = db.Column(db.String(20), default='active') # active, awaiting_prior_approval
 
     # Establish relationships
     grant = db.relationship('Grant', backref=db.backref('team_members', lazy=True, cascade='all, delete-orphan'))
@@ -304,6 +311,7 @@ class GrantTeam(db.Model):
             'user_id': self.user_id,
             'role': self.role,
             'date_added': self.date_added.isoformat() if self.date_added else None,
+            'status': self.status,
             'name': self.user.name,
             'email': self.user.email
         }
@@ -337,4 +345,194 @@ class Document(db.Model):
             'version': self.version,
             'is_superseded': self.is_superseded,
             'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+# Rule Engine Models
+class Rule(db.Model):
+    __tablename__ = 'rules'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    rule_type = db.Column(db.String(50), nullable=False)  # THRESHOLD, CATEGORY_ALLOWABILITY, etc.
+    logic_config = db.Column(db.Text, nullable=False)  # JSON string
+    outcome = db.Column(db.String(20), nullable=False)  # BLOCK, WARN, PRIOR_APPROVAL
+    priority_level = db.Column(db.Integer, default=3)
+    guidance_text = db.Column(db.Text)
+    is_active = db.Column(db.Boolean, default=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    creator = db.relationship('User', backref=db.backref('created_rules', lazy=True))
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'rule_type': self.rule_type,
+            'logic_config': self.logic_config,
+            'outcome': self.outcome,
+            'priority_level': self.priority_level,
+            'guidance_text': self.guidance_text,
+            'is_active': self.is_active,
+            'created_by_id': self.created_by_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+class RuleProfile(db.Model):
+    __tablename__ = 'rule_profiles'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(200), nullable=False)
+    funder_id = db.Column(db.String(100))  # Links to Grant.funder
+    is_active = db.Column(db.Boolean, default=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    reporting_template_filename = db.Column(db.String(200))
+    
+    # Relationships
+    creator = db.relationship('User', backref=db.backref('created_profiles', lazy=True))
+    rules = db.relationship('Rule', secondary='rule_profile_rules', backref=db.backref('profiles', lazy=True))
+    
+    def to_dict(self, include_rules=False):
+        data = {
+            'id': self.id,
+            'name': self.name,
+            'funder_id': self.funder_id,
+            'is_active': self.is_active,
+            'created_by_id': self.created_by_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'reporting_template_filename': self.reporting_template_filename
+        }
+        if include_rules:
+            data['rules'] = [rule.to_dict() for rule in self.rules]
+        return data
+
+# Association table for Rule-Profile many-to-many relationship
+rule_profile_rules = db.Table('rule_profile_rules',
+    db.Column('rule_id', db.Integer, db.ForeignKey('rules.id'), primary_key=True),
+    db.Column('profile_id', db.Integer, db.ForeignKey('rule_profiles.id'), primary_key=True)
+)
+
+class RuleProfileSnapshot(db.Model):
+    __tablename__ = 'rule_profile_snapshots'
+    id = db.Column(db.Integer, primary_key=True)
+    profile_id = db.Column(db.Integer, db.ForeignKey('rule_profiles.id'), nullable=False)
+    snapshot_data = db.Column(db.Text, nullable=False)  # JSON string of profile state
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    profile = db.relationship('RuleProfile', backref=db.backref('snapshots', lazy=True))
+    creator = db.relationship('User', backref=db.backref('created_profile_snapshots', lazy=True))
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'profile_id': self.profile_id,
+            'snapshot_data': self.snapshot_data,
+            'created_by_id': self.created_by_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
+class RuleEvaluation(db.Model):
+    __tablename__ = 'rule_evaluations'
+    id = db.Column(db.Integer, primary_key=True)
+    grant_id = db.Column(db.Integer, db.ForeignKey('grants.id'), nullable=False)
+    rule_id = db.Column(db.Integer, db.ForeignKey('rules.id'), nullable=False)
+    action_type = db.Column(db.String(50)) # EXPENSE_SUBMISSION, PERSONNEL_CHANGE, etc.
+    context_snapshot = db.Column(db.Text)  # JSON string of the data that triggered evaluation
+    triggered_outcome = db.Column(db.String(20), nullable=False)  # What the rule returned
+    final_outcome = db.Column(db.String(20))  # BLOCK, PRIOR_APPROVAL, PENDING_COSIGN, etc.
+    evaluated_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    # Override/approval fields
+    resolved_by_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    resolved_at = db.Column(db.DateTime)
+    resolution_outcome = db.Column(db.String(20))  # APPROVED, REJECTED, etc.
+    override_justification = db.Column(db.Text)
+    override_cosigned_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    
+    # Relationships
+    grant = db.relationship('Grant', backref=db.backref('rule_evaluations', lazy=True))
+    rule = db.relationship('Rule', backref=db.backref('evaluations', lazy=True))
+    resolver = db.relationship('User', foreign_keys=[resolved_by_id], backref=db.backref('resolved_evaluations', lazy=True))
+    cosigner = db.relationship('User', foreign_keys=[override_cosigned_by], backref=db.backref('cosigned_evaluations', lazy=True))
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'grant_id': self.grant_id,
+            'rule_id': self.rule_id,
+            'action_type': self.action_type,
+            'context_snapshot': self.context_snapshot,
+            'triggered_outcome': self.triggered_outcome,
+            'final_outcome': self.final_outcome,
+            'evaluated_at': self.evaluated_at.isoformat() if self.evaluated_at else None,
+            'resolved_by_id': self.resolved_by_id,
+            'resolved_at': self.resolved_at.isoformat() if self.resolved_at else None,
+            'resolution_outcome': self.resolution_outcome,
+            'override_justification': self.override_justification,
+            'override_cosigned_by': self.override_cosigned_by
+        }
+
+class PriorApprovalRequest(db.Model):
+    __tablename__ = 'prior_approval_requests'
+    id = db.Column(db.Integer, primary_key=True)
+    grant_id = db.Column(db.Integer, db.ForeignKey('grants.id'), nullable=False)
+    requester_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    request_type = db.Column(db.String(50), nullable=False) # EXPENSE, PERSONNEL, MODIFICATION
+    target_id = db.Column(db.Integer) # ID of the pending expense, etc.
+    rule_evaluation_id = db.Column(db.Integer, db.ForeignKey('rule_evaluations.id'))
+    status = db.Column(db.String(20), default='pending') # pending, approved, rejected
+    justification = db.Column(db.Text)
+    rsu_comments = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    resolved_at = db.Column(db.DateTime)
+    resolved_by_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+
+    # Relationships
+    grant = db.relationship('Grant', foreign_keys=[grant_id], backref=db.backref('prior_approvals', lazy=True))
+    requester = db.relationship('User', foreign_keys=[requester_id], backref='my_prior_approvals')
+    resolver = db.relationship('User', foreign_keys=[resolved_by_id], backref='resolved_prior_approvals')
+    evaluation = db.relationship('RuleEvaluation', backref=db.backref('request', uselist=False))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'grant_id': self.grant_id,
+            'requester_id': self.requester_id,
+            'request_type': self.request_type,
+            'target_id': self.target_id,
+            'rule_evaluation_id': self.rule_evaluation_id,
+            'status': self.status,
+            'justification': self.justification,
+            'rsu_comments': self.rsu_comments,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'resolved_at': self.resolved_at.isoformat() if self.resolved_at else None,
+            'resolved_by_id': self.resolved_by_id
+        }
+
+class RuleExemption(db.Model):
+    __tablename__ = 'rule_exemptions'
+    id = db.Column(db.Integer, primary_key=True)
+    grant_id = db.Column(db.Integer, db.ForeignKey('grants.id'), nullable=False)
+    rule_id = db.Column(db.Integer, db.ForeignKey('rules.id'), nullable=False)
+    justification = db.Column(db.Text, nullable=False)
+    granted_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    granted_at = db.Column(db.DateTime, default=datetime.utcnow)
+    is_active = db.Column(db.Boolean, default=True)
+
+    # Relationships
+    grant = db.relationship('Grant', foreign_keys=[grant_id], backref=db.backref('exemptions', lazy=True))
+    rule = db.relationship('Rule', backref=db.backref('exemptions', lazy=True))
+    grantor = db.relationship('User', foreign_keys=[granted_by_id], backref='granted_exemptions')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'grant_id': self.grant_id,
+            'rule_id': self.rule_id,
+            'justification': self.justification,
+            'granted_by_id': self.granted_by_id,
+            'granted_at': self.granted_at.isoformat() if self.granted_at else None,
+            'is_active': self.is_active
         }

@@ -1,5 +1,6 @@
-from models import db, Grant, User, GrantTeam
+from models import db, Grant, User, GrantTeam, PriorApprovalRequest
 from datetime import datetime
+from services.rule_service import RuleService
 
 class GrantTeamService:
     @staticmethod
@@ -31,16 +32,68 @@ class GrantTeamService:
                 db.session.commit()
                 return existing_entry
 
-        # 3. Create new GrantTeam entry
+        # 3. Rule Engine Evaluation (Compliance Check)
+        member_data = {
+            'role': role,
+            'user_id': user_id,
+            'user_name': user.name,
+            'user_email': user.email
+        }
+        rule_result = RuleService.check_personnel_change(grant_id, member_data, "addition")
+        
+        if rule_result['outcome'] == 'BLOCK':
+            reasons = "; ".join([r['guidance_text'] for r in rule_result['triggered_rules']])
+            raise ValueError(f"Compliance Block: {reasons}")
+
+        final_status = 'active'
+        if rule_result['outcome'] == 'PRIOR_APPROVAL':
+            final_status = 'awaiting_prior_approval'
+
+        # 4. Create new GrantTeam entry
         new_member = GrantTeam(
             grant_id=grant_id,
             user_id=user_id,
             role=role,
-            date_added=datetime.utcnow()
+            date_added=datetime.utcnow(),
+            status=final_status
         )
         db.session.add(new_member)
+        db.session.flush() # Get ID
+
+        # 5. Handle Prior Approval Request if needed
+        if rule_result['outcome'] == 'PRIOR_APPROVAL':
+            eval_ids = rule_result.get('evaluation_ids', [])
+            pa_request = PriorApprovalRequest(
+                grant_id=grant_id,
+                requester_id=caller_id,
+                request_type='PERSONNEL',
+                target_id=new_member.id,
+                rule_evaluation_id=eval_ids[0] if eval_ids else None,
+                status='pending',
+                justification=f"Adding {user.name} as {role}."
+            )
+            db.session.add(pa_request)
+        
         db.session.commit()
         return new_member
+
+    @staticmethod
+    def preview_add_team_member(grant_id, user_id, role, caller_id):
+        """Dry run for personnel change to see compliance impact."""
+        grant = Grant.query.get(grant_id)
+        if not grant:
+            raise ValueError(f"Grant with ID {grant_id} not found.")
+        
+        user = User.query.get(user_id)
+        if not user:
+            raise ValueError(f"User with ID {user_id} not found.")
+
+        member_data = {
+            'role': role,
+            'user_id': user_id,
+            'user_name': user.name
+        }
+        return RuleService.check_personnel_change(grant_id, member_data, "addition")
 
     @staticmethod
     def remove_team_member_from_grant(grant_id, user_id, caller_id):

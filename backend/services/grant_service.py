@@ -2,7 +2,8 @@ import os
 import json
 from datetime import datetime
 from werkzeug.utils import secure_filename
-from models import db, Grant, BudgetCategory, Milestone, AuditLog
+from models import db, Grant, BudgetCategory, Milestone, AuditLog, RuleProfile, RuleProfileSnapshot
+from services.compliance_service import ComplianceService
 
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'}
@@ -35,7 +36,20 @@ class GrantService:
         :return: Grant object
         """
         try:
-            # 1. Basic Fields
+            rule_profile_id = data.get('rule_profile_id')
+            rule_snapshot_id = None
+            if rule_profile_id:
+                profile = RuleProfile.query.get(int(rule_profile_id))
+                if profile:
+                    snapshot = RuleProfileSnapshot(
+                        profile_id=profile.id,
+                        snapshot_data=json.dumps([r.to_dict() for r in profile.rules if r.is_active]),
+                        created_by_id=user_id
+                    )
+                    db.session.add(snapshot)
+                    db.session.flush()
+                    rule_snapshot_id = snapshot.id
+
             grant = Grant(
                 title=data.get('title'),
                 funder=data.get('funder'),
@@ -49,6 +63,8 @@ class GrantService:
                 financial_reporting_frequency=data.get('financial_reporting_frequency'),
                 progress_reporting_frequency=data.get('progress_reporting_frequency'),
                 special_requirements=data.get('special_requirements'),
+                rule_profile_id=rule_profile_id,
+                rule_snapshot_id=rule_snapshot_id,
                 pi_id=user_id,
                 status='pending'
             )
@@ -58,6 +74,19 @@ class GrantService:
             grant.budget_breakdown_filename = GrantService._save_file(files.get('budget_breakdown'), 'documents')
             grant.award_letter_filename = GrantService._save_file(files.get('award_letter'), 'documents')
             grant.ethical_approval_filename = GrantService._save_file(files.get('ethical_approval'), 'documents')
+            grant.reporting_template_filename = GrantService._save_file(files.get('reporting_template'), 'documents')
+            
+            # Learn from upload: update profile template if new one provided
+            if grant.reporting_template_filename and rule_profile_id:
+                profile = RuleProfile.query.get(int(rule_profile_id))
+                if profile:
+                    profile.reporting_template_filename = grant.reporting_template_filename
+            
+            # Fallback: if no upload, use profile's persistent template
+            if not grant.reporting_template_filename and rule_profile_id:
+                profile = RuleProfile.query.get(int(rule_profile_id))
+                if profile and profile.reporting_template_filename:
+                    grant.reporting_template_filename = profile.reporting_template_filename
 
             db.session.add(grant)
             db.session.flush() # Generate ID
@@ -183,14 +212,18 @@ class GrantService:
             next_deadline_date = next_milestone.due_date if next_milestone else None
             next_deadline_label = next_milestone.title if next_milestone else "No upcoming deadlines"
 
-            # 3. Format Data
+            # 3. Compliance Health Score
+            compliance_status = ComplianceService.calculate_health_score(grant.id)
+
+            # 4. Format Data
             data = grant.to_dict(include_categories=True)
             data.update({
                 'spent_percent': spent_percent,
                 'total_mwk': grant.total_budget * grant.exchange_rate,
                 'next_deadline_date': next_deadline_date.isoformat() if next_deadline_date else None,
                 'next_deadline_label': next_deadline_label,
-                'exchange_rate_label': f"1 {grant.currency} = {grant.exchange_rate} MWK"
+                'exchange_rate_label': f"1 {grant.currency} = {grant.exchange_rate} MWK",
+                'compliance_status': compliance_status
             })
             results.append(data)
             

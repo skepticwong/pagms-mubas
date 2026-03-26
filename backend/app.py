@@ -14,12 +14,14 @@ from routes.reports import reports_bp
 from routes.expenses import expenses_bp
 from routes.finance import finance_bp
 from routes.documents import documents_bp
+from routes.rules import rules_bp
 from flask import send_from_directory
 
 def create_app():
     app = Flask(__name__)
     app.secret_key = 'pagms-mubas-secret-2025-change-in-production'
     
+    # Critical for localhost (HTTP) development
     # ✅ Critical for localhost (HTTP) development
     app.config.update(
         SESSION_COOKIE_SAMESITE='Lax',
@@ -28,9 +30,11 @@ def create_app():
     )
     
     CORS(app, 
-         origins=["http://localhost:5173"], 
+         origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
          supports_credentials=True, 
-         intercept_exceptions=True)
+         intercept_exceptions=True,
+         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"])
     
     os.makedirs(app.instance_path, exist_ok=True)
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(app.instance_path, 'pagms.db')
@@ -65,6 +69,45 @@ def create_app():
                         patched = True
                     except Exception as e:
                         print(f"Error migrating {col_name}: {e}")
+            
+            # --- Migrating rules & profiles & grants ---
+            updates = [
+                ("rule_profiles", "created_at", "DATETIME"),
+                ("rule_profiles", "funder_id", "VARCHAR(100)"),
+                ("rules", "priority_level", "INTEGER"),
+                ("rules", "guidance_text", "TEXT"),
+                ("rules", "is_active", "BOOLEAN"),
+                ("rules", "created_at", "DATETIME"),
+                ("grants", "rule_profile_id", "INTEGER"),
+                ("grants", "rule_snapshot_id", "INTEGER"),
+                ("grants", "reporting_template_filename", "VARCHAR(200)"),
+                ("rule_profiles", "reporting_template_filename", "VARCHAR(200)")
+            ]
+            
+            for table_name, col_name, col_type in updates:
+                try:
+                    cursor.execute(f"PRAGMA table_info({table_name})")
+                    table_info = cursor.fetchall()
+                    if table_info: # Table exists
+                        cols = [c[1] for c in table_info]
+                        if col_name not in cols:
+                            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}")
+                            patched = True
+                except Exception as e:
+                    print(f"Error migrating {table_name}.{col_name}: {e}")
+
+            # --- Fix rule_profile_rules association table names ---
+            try:
+                cursor.execute("PRAGMA table_info(rule_profile_rules)")
+                table_info = cursor.fetchall()
+                if table_info:
+                    rpr_cols = [c[1] for c in table_info]
+                    if 'profile_id' not in rpr_cols:
+                        cursor.execute("DROP TABLE rule_profile_rules")
+                        patched = True
+            except Exception as e:
+                pass
+
             if patched:
                 conn.commit()
             conn.close()
@@ -79,11 +122,12 @@ def create_app():
     app.register_blueprint(grants_bp, url_prefix='/api')
     app.register_blueprint(misc_bp, url_prefix='/api')
     app.register_blueprint(tasks_bp, url_prefix='/api')
-    app.register_blueprint(expenses_bp, url_prefix='/api')
     app.register_blueprint(users_bp, url_prefix='/api')
     app.register_blueprint(reports_bp, url_prefix='/api')
+    app.register_blueprint(expenses_bp, url_prefix='/api')
     app.register_blueprint(finance_bp, url_prefix='/api')
     app.register_blueprint(documents_bp, url_prefix='/api')
+    app.register_blueprint(rules_bp, url_prefix='/api')
 
     @app.route('/api/uploads/<path:filename>')
     def serve_uploads(filename):

@@ -2,8 +2,9 @@
 from flask import Blueprint, request, jsonify, session
 from flask_cors import CORS
 from datetime import datetime
-from models import db, ExpenseClaim, Grant, User, BudgetCategory, AuditLog
+from models import db, ExpenseClaim, Grant, User, BudgetCategory, AuditLog, PriorApprovalRequest, RuleEvaluation
 from services.grant_service import GrantService
+from services.rule_service import RuleService
 
 expenses_bp = Blueprint('expenses', __name__)
 
@@ -124,7 +125,28 @@ def submit_expense():
             from services.grant_service import GrantService
             receipt_filename = GrantService._save_file(receipt_file, 'receipts')
 
-        # 4. Create Expense Claim
+        # 4. Rule Engine Evaluation (Compliance Check)
+        expense_context = {
+            'category': category_name,
+            'amount': amount,
+            'description': description,
+            'date': expense_date_str
+        }
+        rule_result = RuleService.evaluate_expense(expense_context, grant_id)
+        
+        final_status = 'pending'
+        if rule_result['outcome'] == 'BLOCK':
+            reasons = "; ".join([r['guidance_text'] for r in rule_result['triggered_rules']])
+            return jsonify({
+                'error': 'Compliance Block: This expense is unallowable.',
+                'reasons': reasons,
+                'triggered_rules': rule_result['triggered_rules']
+            }), 403
+        
+        if rule_result['outcome'] == 'PRIOR_APPROVAL':
+            final_status = 'awaiting_prior_approval'
+        
+        # 5. Create Expense Claim
         expense_date = datetime.strptime(expense_date_str, '%Y-%m-%d').date()
         
         claim = ExpenseClaim(
@@ -137,27 +159,50 @@ def submit_expense():
             description=description,
             receipt_filename=receipt_filename,
             payment_method=payment_method,
-            status='pending'
+            status=final_status
         )
         db.session.add(claim)
+        db.session.flush() # Get claim.id
+
+        # 6. Handle Prior Approval Request if needed
+        if rule_result['outcome'] == 'PRIOR_APPROVAL':
+            # Create a combined request for all triggered rules that require approval
+            # For simplicity, we link all triggered evaluations to this one request 
+            # or just use the first one as representative
+            eval_ids = rule_result.get('evaluation_ids', [])
+            
+            pa_request = PriorApprovalRequest(
+                grant_id=grant_id,
+                requester_id=user_id,
+                request_type='EXPENSE',
+                target_id=claim.id,
+                rule_evaluation_id=eval_ids[0] if eval_ids else None,
+                status='pending',
+                justification=request.form.get('prior_approval_justification', 'Compliance triggered prior approval.')
+            )
+            db.session.add(pa_request)
         
-        # 5. Log Audit Trail
+        # 7. Log Audit Trail
+        audit_details = f'Submitted {amount} {grant.currency} for {category_name} (Grant: {grant.grant_code}). Outcome: {rule_result["outcome"]}'
         audit = AuditLog(
             user_id=user_id,
             action='expense_submitted',
             resource_type='expense',
-            resource_id=0,
-            details=f'Submitted {amount} {grant.currency} for {category_name} (Grant: {grant.grant_code})'
+            resource_id=claim.id,
+            details=audit_details
         )
         db.session.add(audit)
         
         db.session.commit()
         
-        # Update audit resource ID
-        audit.resource_id = claim.id
-        db.session.commit()
-
-        return jsonify({'message': 'Expense submitted successfully', 'claim': claim.to_dict()}), 201
+        response_data = {
+            'message': 'Expense submitted successfully' if final_status == 'pending' else 'Expense submitted and awaiting prior approval',
+            'claim': claim.to_dict(),
+            'compliance_outcome': rule_result['outcome'],
+            'triggered_rules': rule_result['triggered_rules']
+        }
+        
+        return jsonify(response_data), 201
 
     except ValueError:
         return jsonify({'error': 'Invalid amount or date format'}), 400
@@ -291,9 +336,61 @@ def update_expense(expense_id):
             from services.grant_service import GrantService
             expense.receipt_filename = GrantService._save_file(receipt_file, 'receipts')
 
+        # Re-run Rule Engine Evaluation if amount or category changed
+        rule_outcome = 'PASS'
+        if category_name or amount:
+            expense_context = {
+                'category': expense.category,
+                'amount': expense.amount,
+                'description': expense.description,
+                'date': expense.expense_date.isoformat() if expense.expense_date else ""
+            }
+            rule_result = RuleService.evaluate_expense(expense_context, expense.grant_id)
+            rule_outcome = rule_result['outcome']
+            
+            if rule_outcome == 'BLOCK':
+                db.session.rollback()
+                reasons = "; ".join([r['guidance_text'] for r in rule_result['triggered_rules']])
+                return jsonify({
+                    'error': 'Compliance Block: Updated expense is unallowable.',
+                    'reasons': reasons,
+                    'triggered_rules': rule_result['triggered_rules']
+                }), 403
+            
+            if rule_outcome == 'PRIOR_APPROVAL':
+                expense.status = 'awaiting_prior_approval'
+                # Check for existing pending PA request or create new one
+                pa_request = PriorApprovalRequest.query.filter_by(
+                    request_type='EXPENSE', 
+                    target_id=expense.id,
+                    status='pending'
+                ).first()
+                
+                if not pa_request:
+                    eval_ids = rule_result.get('evaluation_ids', [])
+                    pa_request = PriorApprovalRequest(
+                        grant_id=expense.grant_id,
+                        requester_id=user_id,
+                        request_type='EXPENSE',
+                        target_id=expense.id,
+                        rule_evaluation_id=eval_ids[0] if eval_ids else None,
+                        status='pending',
+                        justification='Updated expense triggered prior approval.'
+                    )
+                    db.session.add(pa_request)
+            else:
+                # If it was awaiting_prior_approval but now PASS/WARN, we might want to reset it?
+                # For now let's just allow it to stay as pending if it passes.
+                if expense.status == 'awaiting_prior_approval':
+                    expense.status = 'pending'
+
         db.session.commit()
 
-        return jsonify({'message': 'Expense updated successfully', 'claim': expense.to_dict()}), 200
+        return jsonify({
+            'message': 'Expense updated successfully', 
+            'claim': expense.to_dict(),
+            'compliance_outcome': rule_outcome
+        }), 200
 
     except ValueError:
         return jsonify({'error': 'Invalid amount or date format'}), 400

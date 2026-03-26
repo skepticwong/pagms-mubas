@@ -40,11 +40,14 @@
     systemAdmin: { registrations: 0, pendingActions: [], ruleConfig: [] },
     capacity: { trainings: [], resources: [] },
   };
+  let priorApprovalRequests = [];
+  let ruleExemptions = [];
+  let exemptionForm = { grant_id: "", rule_id: "", justification: "" };
   let activeSection = "dashboard";
 
   const sectionMeta = {
     dashboard: {
-      title: "Institutional pulse",
+      title: "Institutisonal pulse",
       description:
         "High-level overview of grants, funds, deadlines, and alerts.",
       badge: "Overview",
@@ -73,6 +76,11 @@
       title: "Audit center",
       description: "Assemble audit packs and manage auditor access.",
       badge: "Audit readiness",
+    },
+    "rules-management": {
+      title: "Rules Management",
+      description: "Configure compliance rules and funder profiles.",
+      badge: "Rules Engine",
     },
     "field-map": {
       title: "Field deployment map",
@@ -224,13 +232,53 @@
           amount: `${g.currency} ${g.total_budget.toLocaleString()}`,
           due: g.start_date,
         }));
-    } catch (err) {
-      console.error("Failed to fetch grants", err);
-      error = "Failed to load dashboard data.";
     } finally {
       loading = false;
     }
   });
+
+  async function loadComplianceDetails() {
+    try {
+      const paRes = await axios.get("http://localhost:5000/api/prior-approvals", { withCredentials: true });
+      priorApprovalRequests = paRes.data.requests;
+    } catch (err) {
+      console.error("Failed to load compliance details", err);
+    }
+  }
+
+  $: if (activeSection === "compliance-center") {
+    loadComplianceDetails();
+  }
+
+  async function resolvePriorApproval(requestId, decision) {
+    const justification = prompt(`Enter justification for ${decision}:`);
+    if (!justification) return;
+
+    try {
+      await axios.post(`http://localhost:5000/api/prior-approvals/${requestId}/resolve`, {
+        decision,
+        justification
+      }, { withCredentials: true });
+      alert("Resolution recorded.");
+      loadComplianceDetails();
+    } catch (err) {
+      alert("Failed to resolve: " + (err.response?.data?.error || err.message));
+    }
+  }
+
+  async function submitExemption() {
+    if (!exemptionForm.grant_id || !exemptionForm.rule_id || !exemptionForm.justification) {
+      alert("All fields required");
+      return;
+    }
+    try {
+      await axios.post("http://localhost:5000/api/rule-exemptions", exemptionForm, { withCredentials: true });
+      alert("Exemption added successfully.");
+      exemptionForm = { grant_id: "", rule_id: "", justification: "" };
+    } catch (err) {
+      alert("Failed to add exemption: " + (err.response?.data?.error || err.message));
+    }
+  }
 
   async function approveGrant(grantId) {
     if (!confirm("Are you sure you want to approve this grant?")) return;
@@ -573,6 +621,22 @@
                   <Icon name="audit" size={18} />
                   <span>Prepare audit package</span>
                 </button>
+                <button
+                  class="w-full px-4 py-2 rounded-xl border border-gray-200 text-left font-semibold flex items-center gap-2"
+                  type="button"
+                  on:click={() => router.goToRulesManagement()}
+                >
+                  <Icon name="settings" size={18} className="text-blue-500" />
+                  <span>Manage compliance rules</span>
+                </button>
+                <button
+                  class="w-full px-4 py-2 rounded-xl border border-gray-200 text-left font-semibold flex items-center gap-2"
+                  type="button"
+                  on:click={() => setSection("rules-management")}
+                >
+                  <Icon name="gavel" size={18} className="text-purple-500" />
+                  <span>Rules dashboard</span>
+                </button>
               </div>
             </div>
           </div>
@@ -833,12 +897,80 @@
             </div>
           </div>
         </section>
-      {:else if activeSection === "compliance-center"}
-        <section class="space-y-6">
           <div
             class="bg-white/70 backdrop-blur-xl border border-white/60 rounded-2xl shadow-md p-6"
           >
             <div class="flex items-center justify-between mb-4">
+              <h2 class="text-2xl font-semibold text-gray-900">
+                Prior approval requests
+              </h2>
+              <span class="px-3 py-1 bg-purple-100 text-purple-700 text-xs font-bold rounded-full">
+                {priorApprovalRequests.length} Pending
+              </span>
+            </div>
+            
+            {#if priorApprovalRequests.length === 0}
+              <p class="py-10 text-center text-gray-500 italic">No pending prior approvals.</p>
+            {:else}
+              <div class="space-y-4">
+                {#each priorApprovalRequests as req}
+                  <div class="p-4 rounded-2xl border border-purple-100 bg-purple-50/40">
+                    <div class="flex justify-between items-start">
+                      <div>
+                        <p class="font-bold text-gray-900">{req.grant_title}</p>
+                        <p class="text-xs text-purple-700 font-semibold uppercase">{req.request_type}</p>
+                        <p class="text-sm text-gray-600 mt-2">{req.justification}</p>
+                        <p class="text-xs text-gray-500 mt-1">Requested by: {req.requester_name}</p>
+                      </div>
+                      <div class="flex gap-2">
+                        <button 
+                          class="px-3 py-1 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700"
+                          on:click={() => resolvePriorApproval(req.id, 'APPROVED')}
+                        >
+                          Approve
+                        </button>
+                        <button 
+                          class="px-3 py-1 bg-rose-600 text-white text-xs font-bold rounded-lg hover:bg-rose-700"
+                          on:click={() => resolvePriorApproval(req.id, 'REJECTED')}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+
+          <div
+            class="bg-white/70 backdrop-blur-xl border border-white/60 rounded-2xl shadow-md p-6"
+          >
+            <h2 class="text-2xl font-semibold text-gray-900 mb-4">
+              Grant-specific exemptions (Whitelisting)
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end bg-gray-50/50 p-4 rounded-2xl border border-gray-100 mb-6">
+              <div>
+                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Grant ID</label>
+                <input type="number" bind:value={exemptionForm.grant_id} class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 15"/>
+              </div>
+              <div>
+                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Rule ID</label>
+                <input type="number" bind:value={exemptionForm.rule_id} class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 3"/>
+              </div>
+              <div>
+                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Justification</label>
+                <input type="text" bind:value={exemptionForm.justification} class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="Why whitelist?"/>
+              </div>
+              <button 
+                class="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700"
+                on:click={submitExemption}
+              >
+                Create Exemption
+              </button>
+            </div>
+
+            <div class="flex items-center justify-between mb-4 mt-8">
               <h2 class="text-2xl font-semibold text-gray-900">
                 Compliance status by funder
               </h2>
@@ -846,7 +978,7 @@
                 >Manage rulebook</button
               >
             </div>
-            <div class="space-y-4">
+            <div class="space-y-4 text-sm">
               {#each rsuData.compliance.byFunder as funder}
                 <div class="p-4 rounded-2xl border border-gray-100 bg-white/80">
                   <div class="flex items-center justify-between mb-2">
@@ -931,6 +1063,75 @@
                   >
                 </div>
               {/each}
+            </div>
+          </div>
+        </section>
+      {:else if activeSection === "rules-management"}
+        <section class="space-y-6">
+          <div
+            class="bg-white/70 backdrop-blur-xl border border-white/60 rounded-2xl shadow-md p-6"
+          >
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <h2 class="text-2xl font-semibold text-gray-900">
+                  Compliance Rules Engine
+                </h2>
+                <p class="text-sm text-gray-500">
+                  Manage compliance rules, funder profiles, and rule evaluations.
+                </p>
+              </div>
+              <button
+                class="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold"
+                on:click={() => router.goToRulesManagement()}
+              >
+                Open Rules Manager
+              </button>
+            </div>
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="p-4 rounded-2xl bg-blue-50/70 border border-blue-100">
+                <p class="text-xs text-blue-700 uppercase tracking-wide mb-2">
+                  Active Rules
+                </p>
+                <p class="text-2xl font-bold text-blue-900">12</p>
+                <p class="text-xs text-blue-600 mt-1">Across all funders</p>
+              </div>
+              <div class="p-4 rounded-2xl bg-amber-50/70 border border-amber-100">
+                <p class="text-xs text-amber-700 uppercase tracking-wide mb-2">
+                  Funder Profiles
+                </p>
+                <p class="text-2xl font-bold text-amber-900">4</p>
+                <p class="text-xs text-amber-600 mt-1">NIH, EU Horizon, Ford, World Bank</p>
+              </div>
+            </div>
+          </div>
+          <div
+            class="bg-white/70 backdrop-blur-xl border border-white/60 rounded-2xl shadow-md p-6"
+          >
+            <h3 class="text-lg font-semibold text-gray-900 mb-3">
+              Quick Actions
+            </h3>
+            <div class="grid md:grid-cols-3 gap-4">
+              <button
+                class="p-4 rounded-2xl border border-gray-200 text-left hover:bg-gray-50 transition-colors"
+                on:click={() => router.goToRulesManagement()}
+              >
+                <h4 class="font-semibold text-gray-900 mb-1">Manage Rules</h4>
+                <p class="text-sm text-gray-600">Create, edit, and activate compliance rules</p>
+              </button>
+              <button
+                class="p-4 rounded-2xl border border-gray-200 text-left hover:bg-gray-50 transition-colors"
+                on:click={() => router.goToRulesManagement()}
+              >
+                <h4 class="font-semibold text-gray-900 mb-1">Funder Profiles</h4>
+                <p class="text-sm text-gray-600">Configure rule sets by funding organization</p>
+              </button>
+              <button
+                class="p-4 rounded-2xl border border-gray-200 text-left hover:bg-gray-50 transition-colors"
+                on:click={() => router.goToRulesManagement()}
+              >
+                <h4 class="font-semibold text-gray-900 mb-1">Rule Testing</h4>
+                <p class="text-sm text-gray-600">Test rules with sample data</p>
+              </button>
             </div>
           </div>
         </section>

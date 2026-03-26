@@ -4,6 +4,7 @@
     import { tweened } from 'svelte/motion';
     import { cubicOut } from 'svelte/easing';
     import Layout from '../components/Layout.svelte';
+    import Icon from '../components/Icon.svelte';
     import { router } from '../stores/router.js';
     import { user } from '../stores/auth.js';
 
@@ -65,6 +66,7 @@
     let progressReportingFrequency = 'biannual';
     let milestones = [];
     let specialRequirements = '';
+    let reportingTemplateFile = null;
 
     // Step 5: Documents
     let agreement_file = null;
@@ -83,6 +85,10 @@
     let validationErrors = {};
     let showPage = false;
     let hasInteracted = false;
+
+    // Rules Engine Integration
+    let selectedRuleProfile = null;
+    let ruleGuidanceHighlights = [];
 
     $: totalBudgetNumber = parseFloat(total_budget) || 0;
     $: mwkValue.set(totalBudgetNumber * usdToMwkRate);
@@ -278,6 +284,37 @@
       validateForm();
     }
 
+    async function handleFunderChange() {
+      markInteracted();
+      
+      const funderId = funder === 'other' ? '' : funder;
+      if (!funderId) {
+        selectedRuleProfile = null;
+        ruleGuidanceHighlights = [];
+        return;
+      }
+
+      try {
+        const response = await axios.get(`http://localhost:5000/api/rule-profiles/active?funder_id=${funderId}`, { withCredentials: true });
+        if (response.data && response.data.profiles && response.data.profiles.length > 0) {
+          selectedRuleProfile = response.data.profiles[0];
+          // Extract active limits and guidance
+          ruleGuidanceHighlights = selectedRuleProfile.rules
+            .filter(r => r.is_active && r.guidance_text)
+            .map(r => ({ text: r.guidance_text, outcome: r.outcome }));
+        } else {
+          selectedRuleProfile = null;
+          ruleGuidanceHighlights = [];
+        }
+        
+        // Clear any previous manual upload when funder changes, 
+        // to let the persistent template take over if it exists.
+        reportingTemplateFile = null;
+      } catch (err) {
+        console.error("Failed to fetch rule profiles", err);
+      }
+    }
+
     function nextStep() {
       if (validateCurrentStep()) {
         currentStep = Math.min(currentStep + 1, 7);
@@ -302,70 +339,72 @@
       return true;
     }
 
-    function validateCurrentStep() {
-      validationErrors = {};
+    function validateCurrentStep(step = currentStep) {
+      // Don't clear validationErrors here if we are checking all steps via validateForm
+      const stepErrors = {};
       
-      switch(currentStep) {
+      switch(step) {
         case 1: // Basic Info
-          if (!title.trim()) validationErrors.title = 'Grant Title is required';
-          if (!funder) validationErrors.funder = 'Funder is required';
+          if (!title.trim()) stepErrors.title = 'Grant Title is required';
+          if (!funder) stepErrors.funder = 'Funder is required';
           if (funder === 'other' && !funderOther.trim()) {
-            validationErrors.funderOther = 'Please specify the funder';
+            stepErrors.funderOther = 'Please specify the funder';
           }
-          if (!grant_code.trim()) validationErrors.grant_code = 'Grant Code is required';
+          if (!grant_code.trim()) stepErrors.grant_code = 'Grant Code is required';
           if (!funderReferenceNumber.trim()) {
-            validationErrors.funderReferenceNumber = 'Funder Reference Number is required';
+            stepErrors.funderReferenceNumber = 'Funder Reference Number is required';
           }
-          if (!start_date) validationErrors.start_date = 'Start Date is required';
-          if (!end_date) validationErrors.end_date = 'End Date is required';
+          if (!start_date) stepErrors.start_date = 'Start Date is required';
+          if (!end_date) stepErrors.end_date = 'End Date is required';
           
           if (start_date && end_date) {
             const start = new Date(start_date);
             const end = new Date(end_date);
             if (end <= start) {
-              validationErrors.end_date = 'End date must be after start date';
+              stepErrors.end_date = 'End date must be after start date';
             }
           }
           break;
           
         case 2: // Financial Details
           if (!total_budget || parseFloat(total_budget) <= 0) {
-            validationErrors.total_budget = 'Total Budget must be greater than 0';
+            stepErrors.total_budget = 'Total Budget must be greater than 0';
           }
           if (!usdToMwkRate || parseFloat(usdToMwkRate) <= 0) {
-            validationErrors.usdToMwkRate = 'Exchange rate must be greater than 0';
+            stepErrors.usdToMwkRate = 'Exchange rate must be greater than 0';
           }
           break;
           
         case 3: // Budget Categories
           if (budgetCategories.length === 0) {
-            validationErrors.budgetCategories = 'At least one budget category is required';
+            stepErrors.budgetCategories = 'At least one budget category is required';
           } else {
             budgetCategories.forEach((cat, i) => {
               if (!cat.name.trim()) {
-                validationErrors[`category_${i}_name`] = 'Category name is required';
+                stepErrors[`category_${i}_name`] = 'Category name is required';
               }
               if (!cat.allocated || parseFloat(cat.allocated) < 0) {
-                validationErrors[`category_${i}_allocated`] = 'Valid allocated amount is required';
+                stepErrors[`category_${i}_allocated`] = 'Valid allocated amount is required';
               }
             });
           }
           
           if (total_budget && budgetCategories.length > 0) {
             if (!isBudgetBalanced) {
-              validationErrors.budgetSum = 'Budget allocations must equal total budget';
+              stepErrors.budgetSum = 'Budget allocations must equal total budget';
             }
           }
           break;
           
-        case 4: // Compliance - optional fields, minimal validation
+        case 4: // Compliance
           milestones.forEach((milestone, i) => {
-            if (milestone.title || milestone.dueDate || milestone.reportingPeriod) {
-              if (!milestone.title.trim()) {
-                validationErrors[`milestone_${i}_title`] = 'Milestone title is required';
+            // Validate if any field is filled
+            if (milestone.title || milestone.dueDate || milestone.reportingPeriod || milestone.description) {
+              if (!milestone.title || !milestone.title.trim()) {
+                stepErrors[`milestone_${i}_title`] = 'Milestone title is required';
               }
               if (!milestone.dueDate) {
-                validationErrors[`milestone_${i}_dueDate`] = 'Due date is required';
+                stepErrors[`milestone_${i}_dueDate`] = 'Due date is required';
               }
             }
           });
@@ -373,51 +412,59 @@
           
         case 5: // Documents
           if (!agreement_file) {
-            validationErrors.agreement = 'Grant Agreement PDF is required';
+            stepErrors.agreement = 'Grant Agreement PDF is required';
           }
           if (!budgetBreakdownFile) {
-            validationErrors.budgetBreakdown = 'Budget Breakdown is required';
+            stepErrors.budgetBreakdown = 'Budget Breakdown is required';
           }
           if (!awardLetterFile) {
-            validationErrors.awardLetter = 'Award Letter is required';
+            stepErrors.awardLetter = 'Award Letter is required';
           }
           break;
           
-        case 6: // Team Members - optional but validate if provided
+        case 6: // Team Members
           teamMembers.forEach((member, i) => {
             if (member.name || member.email || member.role || member.dailyRate) {
               if (!member.name.trim()) {
-                validationErrors[`team_${i}_name`] = 'Team member name is required';
+                stepErrors[`team_${i}_name`] = 'Team member name is required';
               }
               if (!member.email.trim()) {
-                validationErrors[`team_${i}_email`] = 'Team member email is required';
+                stepErrors[`team_${i}_email`] = 'Team member email is required';
               } else if (!member.email.includes('@mubas.ac.mw')) {
-                validationErrors[`team_${i}_email`] = 'Email must be a MUBAS domain';
+                stepErrors[`team_${i}_email`] = 'Email must be a MUBAS domain';
               }
             }
           });
           break;
       }
       
-      return Object.keys(validationErrors).length === 0;
+      // Update global validationErrors for the current step
+      if (step === currentStep) {
+        validationErrors = stepErrors;
+      }
+      
+      return Object.keys(stepErrors).length === 0;
     }
 
     const fieldError = (key) => (hasInteracted ? validationErrors[key] : null);
   
     function validateForm() {
-      // Run validation for all steps
-      const currentStepCache = currentStep;
+      // Run validation for all steps without modifying currentStep UI state
       let allValid = true;
+      let newValidationErrors = {};
       
       for (let i = 1; i <= 6; i++) {
-        currentStep = i;
-        if (!validateCurrentStep()) {
+        // We need a version of validateCurrentStep that doesn't touch global validationErrors
+        // or we just call it and it updates it. Since validateForm is called only at the end
+        // or on interaction, we should be careful.
+        if (!validateCurrentStep(i)) {
           allValid = false;
+          // Note: validateCurrentStep(currentStep) will have updated the global validationErrors
+          // for the UI. If the error is in a different step, it won't be shown yet.
           break;
         }
       }
       
-      currentStep = currentStepCache;
       return allValid;
     }
 
@@ -454,6 +501,10 @@
         formData.append('financial_reporting_frequency', financialReportingFrequency);
         formData.append('progress_reporting_frequency', progressReportingFrequency);
         
+        if (selectedRuleProfile) {
+          formData.append('rule_profile_id', selectedRuleProfile.id);
+        }
+        
         // Add milestones
         if (milestones.length > 0) {
           const milestonesData = milestones
@@ -480,6 +531,7 @@
         if (budgetBreakdownFile) formData.append('budget_breakdown', budgetBreakdownFile);
         if (awardLetterFile) formData.append('award_letter', awardLetterFile);
         if (ethicalApprovalFile) formData.append('ethical_approval', ethicalApprovalFile);
+        if (reportingTemplateFile) formData.append('reporting_template', reportingTemplateFile);
         
         if (teamMembers.length > 0) {
           formData.append('team_members', JSON.stringify(
@@ -544,6 +596,9 @@
         case 'ethicalApproval':
           ethicalApprovalFile = file;
           break;
+        case 'reportingTemplate':
+          reportingTemplateFile = file;
+          break;
       }
       
       markInteracted();
@@ -562,6 +617,9 @@
           break;
         case 'ethicalApproval':
           ethicalApprovalFile = null;
+          break;
+        case 'reportingTemplate':
+          reportingTemplateFile = null;
           break;
       }
       markInteracted();
@@ -700,7 +758,7 @@
                   id="funder"
                   class="w-full px-4 py-2.5 border {fieldError('funder') ? 'border-red-500' : 'border-gray-300'} rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   bind:value={funder}
-                  on:change={markInteracted}
+                  on:change={handleFunderChange}
                 >
                   <option value="">Select Funder</option>
                   {#each FUNDERS as funderOption}
@@ -1021,6 +1079,29 @@
               <h2 class="text-2xl font-bold text-gray-900">Compliance Rules & Reporting Schedule</h2>
               <p class="text-sm text-gray-600 mt-1">Configure reporting requirements, milestones, and special funder conditions.</p>
             </div>
+            <!-- Dynamic Rule Guidance -->
+            {#if selectedRuleProfile && ruleGuidanceHighlights.length > 0}
+              <div class="mb-8 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-6 shadow-sm">
+                <h3 class="flex items-center gap-2 text-blue-900 font-bold mb-3">
+                  <Icon name="compliance" size={24} /> {selectedRuleProfile.name} Compliance Guidelines
+                </h3>
+                <p class="text-sm text-blue-800 mb-4">The following rules will be actively enforced for all expenses submitted under this grant:</p>
+                <ul class="space-y-3">
+                  {#each ruleGuidanceHighlights as guidance}
+                    <li class="flex items-start gap-3 bg-white/60 p-3 rounded-xl border border-white/40 shadow-sm">
+                      <span class="mt-0.5">
+                        <Icon 
+                          name={guidance.outcome === 'BLOCK' ? 'statusCritical' : guidance.outcome === 'PRIOR_APPROVAL' ? 'statusWarn' : 'info'} 
+                          size={18} 
+                          className={guidance.outcome === 'BLOCK' ? 'text-red-500' : guidance.outcome === 'PRIOR_APPROVAL' ? 'text-amber-500' : 'text-blue-500'}
+                        />
+                      </span>
+                      <span class="text-sm text-gray-800 font-medium">{guidance.text}</span>
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
 
             <!-- Reporting Frequencies -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
@@ -1054,6 +1135,59 @@
                     <option value={freq.value}>{freq.label}</option>
                   {/each}
                 </select>
+              </div>
+
+              <!-- Funder Reporting Template Upload -->
+              <div class="md:col-span-2">
+                <label class="block text-sm font-medium text-gray-700 mb-2">
+                  Funder Reporting Template (Optional)
+                </label>
+                
+                {#if selectedRuleProfile?.reporting_template_filename && !reportingTemplateFile}
+                  <div class="p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                      <div class="p-2 bg-emerald-100 rounded-lg text-emerald-600">
+                        <Icon name="document" size={20} />
+                      </div>
+                      <div>
+                        <p class="text-sm font-medium text-emerald-900">System Template Detected</p>
+                        <p class="text-xs text-emerald-700">{selectedRuleProfile.reporting_template_filename}</p>
+                      </div>
+                    </div>
+                    <label class="px-4 py-2 bg-white border border-emerald-200 text-emerald-700 rounded-lg hover:bg-emerald-50 text-xs font-medium cursor-pointer transition-colors">
+                      Upload Different Version
+                      <input 
+                        type="file" 
+                        class="hidden" 
+                        accept=".pdf,.doc,.docx"
+                        on:change={(e) => handleFileChange('reportingTemplate', e)}
+                      />
+                    </label>
+                  </div>
+                {:else}
+                  <div class="flex items-center justify-center w-full">
+                    <label class="flex flex-col items-center justify-center w-full h-32 border-2 border-gray-300 border-dashed rounded-xl cursor-pointer bg-gray-50 hover:bg-blue-50 hover:border-blue-300 transition-colors">
+                      <div class="flex flex-col items-center justify-center pt-5 pb-6">
+                        <Icon name="document" size={32} className="mb-2 text-gray-400" />
+                        <p class="mb-2 text-sm text-gray-500">
+                          <span class="font-semibold text-blue-600">Click to upload</span> or drag and drop
+                        </p>
+                        <p class="text-xs text-gray-400">Word or PDF (MAX. 10MB)</p>
+                        {#if reportingTemplateFile}
+                          <p class="mt-2 text-sm font-medium text-emerald-600 truncate max-w-[250px]">
+                            ✓ {reportingTemplateFile.name}
+                          </p>
+                        {/if}
+                      </div>
+                      <input 
+                        type="file" 
+                        class="hidden" 
+                        accept=".pdf,.doc,.docx"
+                        on:change={(e) => handleFileChange('reportingTemplate', e)}
+                      />
+                    </label>
+                  </div>
+                {/if}
               </div>
             </div>
 
@@ -1279,6 +1413,12 @@
                 on:input={markInteracted}
               ></textarea>
             </div>
+
+            {#if hasInteracted && Object.keys(validationErrors).length > 0 && currentStep === 4}
+              <div class="mt-4 p-4 bg-red-50 border border-red-200 rounded-xl">
+                <p class="text-sm text-red-700 font-medium">Please correct the errors above in the compliance section before proceeding.</p>
+              </div>
+            {/if}
           </div>
         {/if}
 

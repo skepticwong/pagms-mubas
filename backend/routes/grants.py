@@ -140,7 +140,17 @@ def add_team_member_to_grant(grant_id):
         new_team_member_entry = GrantTeamService.add_team_member_to_grant(
             grant_id, member_user_id, role, user_id
         )
-        return jsonify(new_team_member_entry.to_dict()), 201
+        
+        # Determine if it was a prior approval trigger
+        result = new_team_member_entry.to_dict()
+        message = 'Team member added successfully.'
+        if new_team_member_entry.status == 'awaiting_prior_approval':
+            message = 'Addition requires prior approval. Request sent to RSU.'
+            
+        return jsonify({
+            'message': message,
+            'member': result
+        }), 201
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
@@ -188,3 +198,45 @@ def remove_team_member_from_grant(grant_id, member_user_id):
         db.session.rollback()
         print(f"Error removing team member from grant: {str(e)}")
         return jsonify({'error': 'Failed to remove team member'}), 500
+
+@grants_bp.route('/grants/<int:grant_id>/team/preview', methods=['POST'])
+def preview_team_change(grant_id):
+    """
+    Dry run to check compliance impact of adding a team member.
+    """
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    try:
+        from services.grant_team_service import GrantTeamService
+        data = request.get_json()
+        member_user_id = data.get('user_id')
+        role = data.get('role')
+
+        preview_result = GrantTeamService.preview_add_team_member(
+            grant_id, member_user_id, role, user_id
+        )
+        return jsonify(preview_result), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        print(f"Error previewing team change: {str(e)}")
+        return jsonify({'error': 'Failed to preview team change'}), 500
+
+@grants_bp.route('/grants/<int:grant_id>/compliance-summary', methods=['GET'])
+def get_grant_compliance_summary(grant_id):
+    """
+    Get a compliance summary for a specific grant.
+    """
+    user_id = session.get('user_id')
+    if not user_id:
+        return jsonify({'error': 'Not authenticated'}), 401
+
+    try:
+        from services.compliance_service import ComplianceService
+        summary = ComplianceService.get_compliance_summary(grant_id)
+        return jsonify(summary), 200
+    except Exception as e:
+        print(f"Error fetching compliance summary: {str(e)}")
+        return jsonify({'error': 'Failed to fetch compliance summary'}), 500
