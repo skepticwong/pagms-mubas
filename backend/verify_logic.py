@@ -1,6 +1,6 @@
 
 from app import create_app
-from models import db, Task, EvidenceSubmission, User, Grant
+from models import db, Task, DeliverableSubmission, User, Grant
 from services.task_service import TaskService
 from datetime import datetime, date
 
@@ -8,12 +8,12 @@ app = create_app()
 
 def verify_logic():
     with app.app_context():
-        print("\n--- Verifying Evidence Review Logic ---")
+        print("\n--- Verifying Deliverable Review Logic ---")
         
         # 1. Setup mock data if needed or use existing
         # For safety in this environment, we just check the logic on a trial object
         
-        # Create a dummy task and evidence for testing (will rollback)
+        # Create a dummy task and deliverable for testing (will rollback)
         try:
             pi = User.query.filter_by(role='PI').first()
             team = User.query.filter_by(role='Team').first()
@@ -27,20 +27,20 @@ def verify_logic():
             db.session.add(task)
             db.session.flush()
             
-            evidence = EvidenceSubmission(task_id=task.id, hours_worked=5, verification_status='pending', activity_notes="Initial notes")
-            db.session.add(evidence)
+            deliverable = DeliverableSubmission(task_id=task.id, hours_worked=5, verification_status='pending', activity_notes="Initial notes")
+            db.session.add(deliverable)
             db.session.flush()
             
-            print(f"Initial: Task Status={task.status}, Evidence Status={evidence.verification_status}")
+            print(f"Initial: Task Status={task.status}, Deliverable Status={deliverable.verification_status}")
             
             # Test Approval
-            TaskService.verify_evidence(evidence.id, 'approved', pi.id)
-            print(f"After Approval: Task Status={task.status}, Evidence Status={evidence.verification_status}")
+            TaskService.verify_deliverable(deliverable.id, 'approved', pi.id)
+            print(f"After Approval: Task Status={task.status}, Deliverable Status={deliverable.verification_status}")
             
             # Test Revision Request
-            TaskService.verify_evidence(evidence.id, 'revision_requested', pi.id, notes="Please do more")
-            print(f"After Revision: Task Status={task.status}, Evidence Status={evidence.verification_status}")
-            print(f"Notes: {evidence.activity_notes}")
+            TaskService.verify_deliverable(deliverable.id, 'revision_requested', pi.id, notes="Please do more")
+            print(f"After Revision: Task Status={task.status}, Deliverable Status={deliverable.verification_status}")
+            print(f"Notes: {deliverable.activity_notes}")
             
             print("\nLogic Verification: SUCCESS")
             

@@ -1,6 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import axios from "axios";
+  import { showToast } from "../stores/toast.js";
   import { user } from "../stores/auth.js";
   import Layout from "../components/Layout.svelte";
   import Icon from "../components/Icon.svelte";
@@ -62,7 +63,7 @@
       resetForm();
       await fetchEvents();
     } catch (err) {
-      alert("Failed to save event: " + (err.response?.data?.error || err.message));
+      showToast("Failed to save event: " + (err.response?.data?.error || err.message), "error");
     }
   }
 

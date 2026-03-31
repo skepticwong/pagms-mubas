@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PI Dashboard Test</title>
+</head>
+<body>
+    <h1>PI Dashboard Changes Test</h1>
+    <p>Check if the following changes are present in PI.svelte:</p>
+    <ul>
+        <li>✅ Spending Status indicator (replaced Budget Alerts)</li>
+        <li>✅ Compliance Health card with Asset Integrity</li>
+        <li>✅ Burn Rate chart with dual bars</li>
+        <li>✅ Strategic Impact (KPIs) section</li>
+        <li>✅ Asset flags in Review Deliverables</li>
+    </ul>
+    
+    <h2>Next Steps:</h2>
+    <ol>
+        <li>Start backend: <code>cd backend && python start_server.py</code></li>
+        <li>Start frontend: <code>cd frontend && npm run dev</code></li>
+        <li>Open browser: <code>http://localhost:5173</code></li>
+        <li>Login as PI and check dashboard</li>
+        <li>Open browser console to see debug logs</li>
+    </ol>
+    
+    <h2>If changes aren't visible:</h2>
+    <ul>
+        <li>Check browser console for errors</li>
+        <li>Clear browser cache (Ctrl+Shift+R)</li>
+        <li>Check if backend is returning new fields (burn_rate, asset_integrity, kpi_summary, spending_status)</li>
+        <li>Look for Svelte compilation errors in terminal</li>
+    </ul>
+</body>
+</html>

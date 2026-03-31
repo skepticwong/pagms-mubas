@@ -1,6 +1,6 @@
 # backend/routes/finance.py
-from flask import Blueprint, jsonify, session
-from models import db, Grant, ExpenseClaim, BudgetCategory, User, Milestone
+from flask import Blueprint, jsonify, session, request
+from models import db, Grant, ExpenseClaim, BudgetCategory, User, Milestone, AuditLog, Tranche
 from datetime import datetime, timedelta
 from sqlalchemy import func, extract
 
@@ -23,7 +23,7 @@ def get_finance_dashboard():
     try:
         # ===== HEADLINE METRICS =====
         # Total Portfolio: Sum of all active grants
-        total_portfolio = db.session.query(func.sum(Grant.amount))\
+        total_portfolio = db.session.query(func.sum(Grant.total_budget))\
             .filter(Grant.status == 'active').scalar() or 0
         
         # Disbursed: Sum of approved expense claims
@@ -77,6 +77,50 @@ def get_finance_dashboard():
                 'grant_id': expense.grant_id,
                 'expense_id': expense.id
             })
+
+        # ===== READY DISBURSEMENTS =====
+        active_grants = Grant.query.filter_by(status='active').all()
+        for grant in active_grants:
+            if grant.disbursement_type == 'single':
+                # Show if no funds disbursed yet
+                if (grant.disbursed_funds or 0) == 0:
+                    disbursement_queue.append({
+                        'grant': grant.title,
+                        'amount': grant.total_budget,
+                        'stage': 'SINGLE_PAYMENT_READY',
+                        'age': 'Ready',
+                        'grant_id': grant.id,
+                        'is_disbursement': True,
+                        'type': 'single'
+                    })
+            elif grant.disbursement_type == 'tranches':
+                # Check manual tranches
+                for tr in grant.tranches:
+                    if tr.status == 'pending' and tr.expected_date <= datetime.utcnow().date():
+                        disbursement_queue.append({
+                            'grant': grant.title,
+                            'amount': tr.amount,
+                            'stage': f'TRANCHE DUE ({tr.expected_date})',
+                            'age': 'Ready',
+                            'grant_id': grant.id,
+                            'tranche_id': tr.id,
+                            'is_disbursement': True,
+                            'type': 'tranche'
+                        })
+            elif grant.disbursement_type == 'milestone_based':
+                # Check milestones that are COMPLETED but not yet RELEASED
+                for m in grant.milestones_list:
+                    if m.status == 'COMPLETED' and m.release_status == 'pending' and (m.funding_amount or 0) > 0:
+                        disbursement_queue.append({
+                            'grant': grant.title,
+                            'amount': m.funding_amount,
+                            'stage': f'MILESTONE_COMPLETED: {m.title}',
+                            'age': 'Ready',
+                            'grant_id': grant.id,
+                            'milestone_id': m.id,
+                            'is_disbursement': True,
+                            'type': 'milestone'
+                        })
 
         # ===== EXCEPTIONS =====
         exceptions = []
@@ -472,3 +516,72 @@ def reject_expense(expense_id):
         db.session.rollback()
         print(f"Error rejecting expense: {str(e)}")
         return jsonify({'error': 'Failed to reject expense', 'details': str(e)}), 500
+
+@finance_bp.route('/finance/release-disbursement', methods=['POST'])
+def release_disbursement():
+    """
+    Release funds for a grant based on the disbursement model.
+    """
+    user_id = session.get('user_id')
+    if not user_id: return jsonify({'error': 'Not authenticated'}), 401
+    user = User.query.get(user_id)
+    if not user or user.role != 'Finance': return jsonify({'error': 'Access denied'}), 403
+
+    data = request.json
+    grant_id = data.get('grant_id')
+    release_type = data.get('type') # 'single', 'tranche', 'milestone'
+    item_id = data.get('item_id') # Tranche.id or Milestone.id
+
+    if not grant_id or not release_type:
+        return jsonify({'error': 'grant_id and type required'}), 400
+
+    try:
+        grant = Grant.query.get_or_404(grant_id)
+        amount_released = 0
+        detail_text = ""
+
+        if release_type == 'single':
+            amount_released = grant.total_budget
+            grant.disbursed_funds = amount_released
+            detail_text = "Single payment full disbursement"
+        
+        elif release_type == 'tranche':
+            tr = Tranche.query.get_or_404(item_id)
+            if tr.grant_id != grant.id: return jsonify({'error': 'Invalid tranche'}), 400
+            tr.status = 'received'
+            tr.actual_received_date = datetime.utcnow().date()
+            amount_released = tr.amount
+            grant.disbursed_funds += amount_released
+            detail_text = f"Manual Tranche (Due {tr.expected_date}) released"
+
+        elif release_type == 'milestone':
+            m = Milestone.query.get_or_404(item_id)
+            if m.grant_id != grant.id: return jsonify({'error': 'Invalid milestone'}), 400
+            if m.status != 'COMPLETED': return jsonify({'error': 'Milestone not completed'}), 400
+            m.release_status = 'released'
+            amount_released = m.funding_amount
+            grant.disbursed_funds += amount_released
+            detail_text = f"Milestone '{m.title}' release"
+        
+        else:
+            return jsonify({'error': 'Invalid release type'}), 400
+
+        # Log Audit
+        db.session.add(AuditLog(
+            user_id=user_id,
+            action='disbursement_released',
+            resource_type='grant',
+            resource_id=grant.id,
+            details=f'{detail_text} ({amount_released} {grant.currency}) released by Finance'
+        ))
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Disbursement successfully released.',
+            'amount_released': amount_released,
+            'total_disbursed': grant.disbursed_funds
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500

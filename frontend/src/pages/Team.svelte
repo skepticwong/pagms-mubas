@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import axios from "axios";
   import Layout from "../components/Layout.svelte";
+  import Icon from "../components/Icon.svelte";
   import { router } from "../stores/router.js";
   import { user } from "../stores/auth.js";
 
@@ -23,8 +24,15 @@
   let selectedUserIdToAdd = "";
   let selectedRole = "";
   let memberToRemove = null;
+  let budgetAuthority = false; // Co-PI budget authority toggle
 
   const ROLES = [
+    {
+      value: "Co-PI",
+      label: "Co-PI",
+      color: "teal",
+      icon: "M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z",
+    },
     {
       value: "Co-Investigator",
       label: "Co-Investigator",
@@ -52,6 +60,16 @@
   ];
 
   const ROLE_PERMISSIONS = {
+    "Co-PI": {
+      name: "Co-PI",
+      permissions: [
+        "Full grant visibility",
+        "Deliverable approval (including PI's)",
+        "Task creation & assignment",
+        "Budget authority (if enabled)",
+      ],
+      color: "teal",
+    },
     "Co-Investigator": {
       name: "Co-Investigator",
       permissions: [
@@ -106,8 +124,8 @@
   async function loadGrants() {
     isLoading = true;
     try {
-      const response = await axios.get("http://localhost:5000/api/grants");
-      grants = response.data;
+      const response = await axios.get("/api/grants", { withCredentials: true });
+      grants = response.data.grants || [];
       if (grants.length > 0 && !selectedGrant) {
         selectedGrant = grants[0];
         await loadTeamMembers(selectedGrant.id);
@@ -123,7 +141,8 @@
     isLoading = true;
     try {
       const response = await axios.get(
-        `http://localhost:5000/api/grants/${grantId}/team`,
+        `/api/grants/${grantId}/team`,
+        { withCredentials: true }
       );
       let fetched = response.data;
       const piMember = {
@@ -145,7 +164,8 @@
   async function loadAvailableUsers() {
     try {
       const response = await axios.get(
-        "http://localhost:5000/api/users/available",
+        "/api/users/available",
+        { withCredentials: true }
       );
       availableUsers = response.data;
     } catch (err) {
@@ -164,6 +184,7 @@
     showAddMemberModal = true;
     selectedUserIdToAdd = "";
     selectedRole = "";
+    budgetAuthority = false;
     error = "";
     success = "";
   }
@@ -173,11 +194,13 @@
     isSubmitting = true;
     try {
       await axios.post(
-        `http://localhost:5000/api/grants/${selectedGrant.id}/team`,
+        `/api/grants/${selectedGrant.id}/team`,
         {
           user_id: selectedUserIdToAdd,
           role: selectedRole,
+          budget_authority: selectedRole === 'Co-PI' ? budgetAuthority : false,
         },
+        { withCredentials: true }
       );
       success = "Team member added successfully!";
       showAddMemberModal = false;
@@ -195,7 +218,8 @@
     isSubmitting = true;
     try {
       await axios.delete(
-        `http://localhost:5000/api/grants/${selectedGrant.id}/team/${memberToRemove.user_id}`,
+        `/api/grants/${selectedGrant.id}/team/${memberToRemove.user_id}`,
+        { withCredentials: true }
       );
       success = "Member removed successfully!";
       showRemoveModal = false;
@@ -750,20 +774,7 @@
                           title="Revoke Access"
                           aria-label="Revoke Access"
                         >
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke-width="2.5"
-                            stroke="currentColor"
-                            class="w-5 h-5"
-                          >
-                            <path
-                              stroke-linecap="round"
-                              stroke-linejoin="round"
-                              d="M22 10.5h-6m-2.25-1.5a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM12 10.5h.008v.008H12V10.5z"
-                            />
-                          </svg>
+                          <Icon name="delete" size={20} />
                         </button>
                       {:else}
                         <div
@@ -934,6 +945,25 @@
                   {/each}
                 </div>
               </div>
+
+              {#if selectedRole === 'Co-PI'}
+                <div class="p-5 bg-amber-50/60 border border-amber-100 rounded-2xl space-y-3">
+                  <label class="flex items-start gap-4 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      bind:checked={budgetAuthority}
+                      class="mt-1 h-5 w-5 rounded-lg border-amber-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                    />
+                    <div>
+                      <span class="text-sm font-black text-gray-900">Grant Budget Authority</span>
+                      <p class="text-xs text-gray-500 mt-0.5">
+                        When enabled, this Co-PI can approve expenses and financial decisions.
+                        <span class="text-amber-600 font-bold">Only enable for senior investigators.</span>
+                      </p>
+                    </div>
+                  </label>
+                </div>
+              {/if}
 
               {#if selectedRolePermissions}
                 <div

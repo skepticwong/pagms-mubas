@@ -1,19 +1,19 @@
-# backend/check_db.py
+
 import os
-import sys
-sys.path.insert(0, os.path.dirname(__file__))
+from app import create_app
+from models import db, Grant, User
 
-from app import app
-from models import db, User, Grant
-
+app = create_app()
 with app.app_context():
-    print("=== USERS ===")
+    grant_count = Grant.query.count()
+    user_count = User.query.count()
+    print(f"Users in DB: {user_count}")
+    print(f"Grants in DB: {grant_count}")
+    if grant_count > 0:
+        first_grant = Grant.query.first()
+        print(f"First grant: {first_grant.title} (PI ID: {first_grant.pi_id})")
+    
+    # Check current session users
     users = User.query.all()
     for u in users:
-        print(f"ID: {u.id}, Name: {u.name}, Email: {u.email}, Role: {u.role}")
-        # DO NOT print password_hash in real projects!
-    
-    print("\n=== GRANTS ===")
-    grants = Grant.query.all()
-    for g in grants:
-        print(f"ID: {g.id}, Title: {g.title}, PI: ?, Budget: {g.total_budget}")
+        print(f"User: {u.id}, {u.email}, {u.role}")

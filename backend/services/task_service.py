@@ -11,6 +11,7 @@ class TaskService:
         deadline_str = data.get('deadline')
         estimated_hours = data.get('estimated_hours')
         pay_rate_override = data.get('pay_rate_override')
+        milestone_id = data.get('milestone_id')
 
         if not all([grant_id, assigned_to_id, title, task_type, deadline_str]):
             raise ValueError("Missing required task fields.")
@@ -37,6 +38,15 @@ class TaskService:
         if grant.pi_id != creator_id:
             raise ValueError("Only the PI of this grant can create tasks for it.")
 
+        # Check Milestone Status if provided
+        if milestone_id:
+            from models import Milestone
+            milestone = Milestone.query.get(milestone_id)
+            if not milestone:
+                raise ValueError(f"Milestone with ID {milestone_id} not found.")
+            if milestone.status == 'COMPLETED':
+                raise ValueError("Cannot add tasks to a completed milestone. Please reopen the milestone first.")
+
         new_task = Task(
             grant_id=grant_id,
             assigned_to=assigned_to_id,
@@ -45,6 +55,7 @@ class TaskService:
             deadline=deadline,
             estimated_hours=estimated_hours,
             pay_rate_override=pay_rate_override,
+            milestone_id=milestone_id,
             status='assigned',
             created_at=datetime.utcnow()
         )
@@ -98,6 +109,7 @@ class TaskService:
             task_dict['grant_code'] = task.grant.grant_code if task.grant else 'N/A'
             task_dict['assigned_to_name'] = task.assignee.name if task.assignee else 'N/A'
             task_dict['assigned_to_email'] = task.assignee.email if task.assignee else 'N/A'
+            task_dict['milestone_title'] = task.milestone_ptr.title if task.milestone_ptr else None
             result.append(task_dict)
         return result
 
@@ -111,6 +123,7 @@ class TaskService:
         task_dict['grant_code'] = task.grant.grant_code if task.grant else 'N/A'
         task_dict['assigned_to_name'] = task.assignee.name if task.assignee else 'N/A'
         task_dict['assigned_to_email'] = task.assignee.email if task.assignee else 'N/A'
+        task_dict['milestone_title'] = task.milestone_ptr.title if task.milestone_ptr else None
         return task_dict
 
     @staticmethod
@@ -128,6 +141,25 @@ class TaskService:
         if task.grant.pi_id != updater_id and updater.role != 'RSU':
             raise ValueError("You do not have permission to update this task.")
 
+        # Check if task is being marked as completed
+        if data.get('status') == 'COMPLETED':
+            # Import here to avoid circular imports
+            from services.asset_assignment_service import AssetAssignmentService
+            
+            # Check if all assigned assets are returned
+            if not AssetAssignmentService.can_complete_task(task_id):
+                # Get pending returns for detailed error message
+                pending_returns = AssetAssignmentService.get_pending_returns_for_task(task_id)
+                pending_assets = [
+                    f"{assignment.asset.name} (assigned to {assignment.assigned_user.name if assignment.assigned_user else 'Unknown'})"
+                    for assignment in pending_returns
+                ]
+                
+                raise ValueError(
+                    f"Cannot complete task - {len(pending_returns)} asset(s) must be returned first: "
+                    f"{', '.join(pending_assets)}. Please ensure all equipment is returned before marking task as complete."
+                )
+
         for key, value in data.items():
             if hasattr(task, key):
                 if key == 'deadline' and isinstance(value, str):
@@ -135,10 +167,7 @@ class TaskService:
                         setattr(task, key, datetime.strptime(value, '%Y-%m-%d').date())
                     except ValueError:
                         raise ValueError("Invalid deadline format. Use YYYY-MM-DD.")
-                elif key == 'assigned_to':
-                    assignee = User.query.get(value)
-                    if not assignee:
-                        raise ValueError(f"User with ID {value} not found for assignment.")
+                elif key == 'assigned_to' or key == 'milestone_id':
                     setattr(task, key, value)
                 else:
                     setattr(task, key, value)
@@ -195,33 +224,35 @@ class TaskService:
         return list(unique_members.values())
 
     @staticmethod
-    def verify_evidence(evidence_id, status, pi_id, notes=None):
+    def verify_deliverable(deliverable_id, status, approver_user_id, notes=None):
         """
-        Verify an evidence submission: approve or request revision.
+        Verify a deliverable submission: approve or request revision.
+        Callers must authorize the approver (e.g. routes/tasks uses can_approve_deliverable).
         """
-        from models import EvidenceSubmission, AuditLog
-        evidence = EvidenceSubmission.query.get(evidence_id)
-        if not evidence:
-            raise ValueError(f"Evidence submission with ID {evidence_id} not found.")
+        from models import DeliverableSubmission, AuditLog
+        deliverable = DeliverableSubmission.query.get(deliverable_id)
+        if not deliverable:
+            raise ValueError(f"Deliverable submission with ID {deliverable_id} not found.")
 
-        task = Task.query.get(evidence.task_id)
+        task = Task.query.get(deliverable.task_id)
         if not task:
-            raise ValueError(f"Task associated with evidence not found.")
-
-        # Authorization check: Only PI of the grant can verify evidence
-        if task.grant.pi_id != pi_id:
-            raise ValueError("Only the PI of this grant can verify evidence.")
+            raise ValueError(f"Task associated with deliverable not found.")
 
         if status == 'approved':
-            evidence.verification_status = 'approved'
-            task.status = 'completed'
+            deliverable.verification_status = 'approved'
+            task.status = 'COMPLETED'
+            
+            # If task is linked to a milestone, update milestone status
+            if task.milestone_id:
+                from services.milestone_service import MilestoneService
+                MilestoneService.update_milestone_status(task.milestone_id)
         elif status == 'revision_requested':
-            evidence.verification_status = 'revision_requested'
+            deliverable.verification_status = 'revision_requested'
             task.status = 'revision_requested'
             if notes:
-                evidence.activity_notes = (evidence.activity_notes or "") + f"\n\nPI Revision Request: {notes}"
+                deliverable.activity_notes = (deliverable.activity_notes or "") + f"\n\nPI Revision Request: {notes}"
         else:
             raise ValueError("Invalid verification status. Use 'approved' or 'revision_requested'.")
 
         db.session.commit()
-        return evidence
+        return deliverable

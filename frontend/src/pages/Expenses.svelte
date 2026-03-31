@@ -22,6 +22,7 @@
   };
   let receiptFile = null;
   let message = { text: "", type: "" };
+  let triggeredRules = [];
 
   onMount(async () => {
     await Promise.all([fetchGrants(), fetchExpenses()]);
@@ -70,6 +71,10 @@
     try {
       await axios.post("http://localhost:5000/api/expenses", data);
       message = { text: "Expense submitted successfully!", type: "success" };
+      triggeredRules = [];
+      // If the response mentioned prior approval, we might want to flag it
+      // But for simplicity, the success message is enough for now as the status shows in the list.
+      
       // Reset form
       formData = {
         grant_id: "",
@@ -84,6 +89,7 @@
     } catch (err) {
       const errorMsg = err.response?.data?.error || "Failed to submit expense";
       message = { text: errorMsg, type: "error" };
+      triggeredRules = err.response?.data?.triggered_rules || [];
     } finally {
       submitting = false;
     }
@@ -117,9 +123,39 @@
 
     {#if message.text}
       <div
-        class={`p-4 rounded-xl border ${message.type === "success" ? "bg-green-50 border-green-200 text-green-800" : "bg-red-50 border-red-200 text-red-800"}`}
+        class={`p-6 rounded-3xl border-2 shadow-sm ${message.type === "success" ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-red-50 border-red-200 text-red-800"}`}
       >
-        {message.text}
+        <div class="flex items-start gap-4">
+          <div class={`p-2 rounded-xl ${message.type === "success" ? "bg-emerald-100 text-emerald-600" : "bg-red-100 text-red-600"}`}>
+            {#if message.type === "success"}
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-6 h-6">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            {:else}
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-6 h-6">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+              </svg>
+            {/if}
+          </div>
+          <div class="flex-1">
+            <p class="font-bold text-lg">{message.text}</p>
+            
+            {#if triggeredRules.length > 0}
+               <div class="mt-4 space-y-4">
+                 <p class="text-sm font-semibold uppercase tracking-wider opacity-70">Rules Triggered:</p>
+                 {#each triggeredRules as rule}
+                   <div class="bg-white/60 backdrop-blur-sm p-4 rounded-2xl border border-red-200 flex items-start gap-3">
+                     <span class="mt-1 flex-shrink-0 w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                     <div>
+                       <p class="font-bold text-sm text-gray-900">{rule.name}</p>
+                       <p class="text-sm text-gray-700 mt-1">{rule.guidance_text || "Automated compliance enforcement."}</p>
+                     </div>
+                   </div>
+                 {/each}
+               </div>
+            {/if}
+          </div>
+        </div>
       </div>
     {/if}
 

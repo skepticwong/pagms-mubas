@@ -2,132 +2,41 @@
   import { onMount } from "svelte";
   import axios from "axios";
   import Layout from "../components/Layout.svelte";
+  import { showToast } from "../stores/toast.js";
+  import { confirm } from "../stores/modals.js";
   import { router } from "../stores/router.js";
   import { user } from "../stores/auth.js";
   import TeamDashboard from "../dashboards/Team.svelte";
+  import PIDashboard from "../dashboards/PI.svelte";
 
-  let showPage = false;
-  let financeView = false;
-  let loading = true;
-  let error = "";
-  let tasks = [];
-  let grants = [];
-  let complianceHealth = "GREEN"; // GREEN, YELLOW, RED
-  let metrics = [
-    { label: "Active Grants", value: 0, accent: "text-blue-600" },
-    { label: "Pending Tasks", value: 0, accent: "text-amber-600" },
-    { label: "Budget Used", value: "0%", accent: "text-emerald-600" },
-    { label: "Alerts", value: 0, accent: "text-rose-600" },
-  ];
-  let budgetProgress = 0;
-  let alerts = [];
-  let pendingTasks = [];
+  let showPage = $derived(isRole("PI"));
+  let financeView = $derived(isRole("Finance"));
+  let teamView = $derived(isRole("Team") || isRole("Researcher"));
 
-  let initialized = false;
+  let initialized = $state(false);
 
   // Finance dashboard state
-  let financeInitialized = false;
-  let financeLoading = true;
-  let financeError = "";
-  let financeData = null;
-  let financeInsights = null;
+  let financeInitialized = $state(false);
+  let financeLoading = $state(true);
+  let financeError = $state("");
+  let financeData = $state(null);
+  let financeInsights = $state(null);
 
-  $: showPage = $user?.role === "PI";
-  $: financeView = $user?.role === "Finance";
-  $: teamView = $user?.role === "Team";
-
-  $: if (showPage && !initialized) {
-    initialized = true;
-    loadDashboard();
+  function isRole(target) {
+    if (!$user?.role) return false;
+    const current = $user.role.toString().toUpperCase();
+    const t = target.toString().toUpperCase();
+    return current.includes(t);
   }
 
-  onMount(() => {
+
+  // Navigation for Finance
+  $effect(() => {
     if (financeView && !financeInitialized) {
       financeInitialized = true;
       loadFinanceDashboard();
     }
   });
-
-  async function loadDashboard() {
-    loading = true;
-    error = "";
-    try {
-      const response = await axios.get("http://localhost:5000/api/tasks", {
-        withCredentials: true,
-      });
-      tasks = response.data?.tasks || [];
-      
-      const grantsRes = await axios.get("http://localhost:5000/api/grants", {
-        withCredentials: true,
-      });
-      grants = grantsRes.data?.grants || [];
-      
-      // Determine overall compliance health (worst case of any grant)
-      if (grants.some(g => g.compliance_status === "RED")) complianceHealth = "RED";
-      else if (grants.some(g => g.compliance_status === "YELLOW")) complianceHealth = "YELLOW";
-      else complianceHealth = "GREEN";
-
-      deriveInsights();
-    } catch (err) {
-      error =
-        err.response?.data?.error ||
-        "Unable to load dashboard data. Please try again.";
-    } finally {
-      loading = false;
-    }
-  }
-
-  function deriveInsights() {
-    const activeGrantIds = new Set();
-    const pending = [];
-    const alertList = [];
-    let estimatedHours = 0;
-    let approvedHours = 0;
-
-    tasks.forEach((task) => {
-      if (task.grant_id) activeGrantIds.add(task.grant_id);
-      const status = (task.status || "").toLowerCase();
-      const est = Number(task.estimated_hours) || 0;
-      estimatedHours += est;
-      if (status === "approved") approvedHours += est;
-      if (status === "submitted") pending.push(task);
-      if (status === "overdue") {
-        alertList.push(`Task “${task.title}” is overdue`);
-      }
-    });
-
-    budgetProgress = estimatedHours
-      ? Math.min(100, Math.round((approvedHours / estimatedHours) * 100))
-      : 0;
-    if (budgetProgress >= 90) {
-      alertList.push("Budget utilisation exceeds 90% across your portfolio");
-    }
-
-    metrics = [
-      {
-        label: "Active Grants",
-        value: activeGrantIds.size,
-        accent: "text-blue-600",
-      },
-      {
-        label: "Pending Tasks",
-        value: pending.length,
-        accent: "text-amber-600",
-      },
-      {
-        label: "Budget Used",
-        value: `${budgetProgress}%`,
-        accent: "text-emerald-600",
-      },
-      { label: "Alerts", value: alertList.length, accent: "text-rose-600" },
-    ];
-
-    alerts = alertList;
-    pendingTasks = pending;
-  }
-
-  $: piName = $user?.name?.replace(/^Dr\.?\s*/i, "") || "PI";
-  $: welcomeCopy = `Welcome back, Dr. ${piName}!`;
 
   const toUSD = (value) =>
     `$${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
@@ -139,16 +48,16 @@
     try {
       const [dashboardRes, burnRateRes, fxRatesRes, deadlinesRes] =
         await Promise.all([
-          axios.get("http://localhost:5000/api/finance/dashboard", {
+          axios.get("/api/finance/dashboard", {
             withCredentials: true,
           }),
-          axios.get("http://localhost:5000/api/finance/burn-rate", {
+          axios.get("/api/finance/burn-rate", {
             withCredentials: true,
           }),
-          axios.get("http://localhost:5000/api/finance/fx-rates", {
+          axios.get("/api/finance/fx-rates", {
             withCredentials: true,
           }),
-          axios.get("http://localhost:5000/api/finance/deadlines", {
+          axios.get("/api/finance/deadlines", {
             withCredentials: true,
           }),
         ]);
@@ -173,251 +82,36 @@
       financeLoading = false;
     }
   }
+
+  async function releaseDisbursement(item) {
+    let detailLabel = "";
+    if (item.type === 'single') detailLabel = "Full Payment";
+    else if (item.type === 'tranche') detailLabel = "Manual Tranche";
+    else if (item.type === 'milestone') detailLabel = "Milestone Release";
+
+    if (!await confirm(`Are you sure you want to release funds for ${item.grant}?\nType: ${detailLabel}\nAmount: ${toUSD(item.amount)}`)) return;
+    
+    const itemId = item.type === 'tranche' ? item.tranche_id : 
+                  item.type === 'milestone' ? item.milestone_id : null;
+
+    try {
+      await axios.post("/api/finance/release-disbursement", {
+        grant_id: item.grant_id,
+        type: item.type,
+        item_id: itemId
+      }, { withCredentials: true });
+      showToast("Disbursement released successfully!", "success");
+      loadFinanceDashboard();
+    } catch (err) {
+      showToast(err.response?.data?.error || "Failed to release disbursement", "error");
+    }
+  }
 </script>
 
 {#if showPage}
   <Layout>
-    <div class="max-w-7xl mx-auto space-y-8 py-2">
-      <section
-        class="bg-white/60 backdrop-blur-xl border border-white/60 rounded-3xl p-8 shadow-lg"
-      >
-        <div class="flex flex-col gap-2">
-          <h1 class="text-3xl md:text-4xl font-bold text-gray-900">
-            {welcomeCopy}
-          </h1>
-          <p class="text-base text-gray-600">
-            This command center keeps your grants compliant, on-budget, and
-            audit-ready.
-          </p>
-          <div class="flex flex-wrap gap-3 pt-2 text-sm text-gray-600">
-            <span class="px-3 py-1 rounded-full bg-blue-50 text-blue-700"
-              >Principal Investigator Workspace</span
-            >
-            <span class="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700"
-              >Real-time oversight</span
-            >
-          </div>
-        </div>
-      </section>
-
-      <section class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-        {#each metrics as metric}
-          <div
-            class="bg-white/65 backdrop-blur-xl border border-white/60 rounded-2xl p-6 shadow-md"
-          >
-            <p class="text-sm text-gray-600">{metric.label}</p>
-            <p class={`mt-2 text-3xl font-bold ${metric.accent}`}>
-              {metric.value}
-            </p>
-          </div>
-        {/each}
-
-        <!-- Compliance Health Card -->
-        <div
-          class="bg-white/65 backdrop-blur-xl border border-white/60 rounded-2xl p-6 shadow-md flex flex-col justify-between"
-        >
-          <div>
-            <p class="text-sm text-gray-600">Compliance Health</p>
-            <div class="flex items-center gap-3 mt-2">
-              <div class="relative flex h-4 w-4">
-                <span class={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${complianceHealth === 'RED' ? 'bg-rose-400' : complianceHealth === 'YELLOW' ? 'bg-amber-400' : 'bg-emerald-400'}`}></span>
-                <span class={`relative inline-flex rounded-full h-4 w-4 ${complianceHealth === 'RED' ? 'bg-rose-500' : complianceHealth === 'YELLOW' ? 'bg-amber-500' : 'bg-emerald-500'}`}></span>
-              </div>
-              <p class={`text-xl font-bold ${complianceHealth === 'RED' ? 'text-rose-600' : complianceHealth === 'YELLOW' ? 'text-amber-600' : 'text-emerald-600'}`}>
-                {complianceHealth === 'RED' ? 'At Risk' : complianceHealth === 'YELLOW' ? 'Needs Attention' : 'Healthy'}
-              </p>
-            </div>
-          </div>
-          <p class="text-xs text-gray-500 mt-2">Based on latest automated rule checks</p>
-        </div>
-      </section>
-
-      <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div class="lg:col-span-2 space-y-6">
-          <div
-            class="bg-white/65 backdrop-blur-xl border border-white/60 rounded-2xl p-6 shadow-md"
-          >
-            <div class="flex items-center justify-between mb-4">
-              <div>
-                <h2 class="text-2xl font-semibold text-gray-900">
-                  Pending approvals
-                </h2>
-                <p class="text-sm text-gray-600">
-                  Tasks awaiting your sign-off.
-                </p>
-              </div>
-              <button
-                class="px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                on:click={loadDashboard}
-                disabled={loading}
-              >
-                {loading ? "Refreshing…" : "Refresh data"}
-              </button>
-            </div>
-
-            {#if error}
-              <div
-                class="mb-4 p-4 rounded-xl border border-red-100 bg-red-50 text-red-700"
-              >
-                {error}
-              </div>
-            {/if}
-
-            {#if loading}
-              <div class="py-10 text-center text-sm text-gray-500">
-                Loading grant activity…
-              </div>
-            {:else if pendingTasks.length === 0}
-              <div class="py-10 text-center text-sm text-gray-500">
-                No tasks are waiting for PI approval.
-              </div>
-            {:else}
-              <div class="space-y-4">
-                {#each pendingTasks as task}
-                  <div
-                    class="p-4 rounded-2xl border border-gray-100 bg-white/80 shadow-sm"
-                  >
-                    <div class="flex flex-col gap-2">
-                      <div class="flex items-center justify-between">
-                        <div>
-                          <p class="text-base font-semibold text-gray-900">
-                            {task.title}
-                          </p>
-                          <p class="text-sm text-gray-500">
-                            {task.grant_title || "Unnamed grant"}
-                          </p>
-                        </div>
-                        <span
-                          class="px-3 py-1 text-xs font-semibold rounded-full bg-amber-100 text-amber-700"
-                          >Submitted</span
-                        >
-                      </div>
-                      <div
-                        class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm text-gray-600"
-                      >
-                        <p>
-                          <span class="font-semibold text-gray-900"
-                            >Assignee:</span
-                          >
-                          {task.assigned_to_name || "Team member"}
-                        </p>
-                        <p>
-                          <span class="font-semibold text-gray-900"
-                            >Deadline:</span
-                          >
-                          {task.deadline
-                            ? new Date(task.deadline).toLocaleDateString()
-                            : "N/A"}
-                        </p>
-                        <p>
-                          <span class="font-semibold text-gray-900"
-                            >Estimated hours:</span
-                          >
-                          {task.estimated_hours || 0}
-                        </p>
-                      </div>
-                      <div class="flex flex-wrap gap-3 pt-2">
-                        <button
-                          class="px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          on:click={() => router.goToReviewEvidence()}
-                        >
-                          Review evidence
-                        </button>
-                        <button
-                          class="px-4 py-2 text-sm font-semibold text-blue-700 bg-blue-50 rounded-lg hover:bg-blue-100"
-                          on:click={() => router.goToTasks()}
-                        >
-                          Open task log
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                {/each}
-              </div>
-            {/if}
-          </div>
-
-          <div
-            class="bg-white/65 backdrop-blur-xl border border-white/60 rounded-2xl p-6 shadow-md"
-          >
-            <h2 class="text-2xl font-semibold text-gray-900">
-              Getting started
-            </h2>
-            <p class="text-sm text-gray-600 mb-4">
-              Quick reminders for compliant post-award execution.
-            </p>
-            <ul class="space-y-3 text-gray-700">
-              <li class="flex gap-3">
-                <span class="text-blue-600 font-semibold">•</span>
-                <span
-                  ><strong>Manage grants</strong> – register new awards and monitor
-                  deliverables.</span
-                >
-              </li>
-              <li class="flex gap-3">
-                <span class="text-blue-600 font-semibold">•</span>
-                <span
-                  ><strong>Track tasks</strong> – assign work, review evidence, and
-                  keep deadlines visible.</span
-                >
-              </li>
-              <li class="flex gap-3">
-                <span class="text-blue-600 font-semibold">•</span>
-                <span
-                  ><strong>Control budget</strong> – approve expenses early and prevent
-                  overspending.</span
-                >
-              </li>
-            </ul>
-          </div>
-        </div>
-
-        <div class="space-y-6">
-          <div
-            class="bg-white/65 backdrop-blur-xl border border-white/60 rounded-2xl p-6 shadow-md"
-          >
-            <h2 class="text-xl font-semibold text-gray-900">
-              Budget utilisation
-            </h2>
-            <p class="text-sm text-gray-600 mb-4">Across all active grants.</p>
-            <div class="relative h-3 bg-gray-100 rounded-full overflow-hidden">
-              <div
-                class="absolute inset-y-0 left-0 bg-emerald-500"
-                style={`width: ${budgetProgress}%`}
-              ></div>
-            </div>
-            <p class="mt-2 text-sm text-gray-600">
-              <span class="font-semibold text-gray-900">{budgetProgress}%</span>
-              of estimated effort certified.
-            </p>
-          </div>
-
-          <div
-            class="bg-white/65 backdrop-blur-xl border border-white/60 rounded-2xl p-6 shadow-md"
-          >
-            <h2 class="text-xl font-semibold text-gray-900">Alerts</h2>
-            <p class="text-sm text-gray-600 mb-4">
-              Audit triggers and urgent follow-ups.
-            </p>
-            {#if loading}
-              <p class="text-sm text-gray-500">Scanning for risks…</p>
-            {:else if alerts.length === 0}
-              <p class="text-sm text-gray-500">
-                No outstanding alerts. Keep up the accountability.
-              </p>
-            {:else}
-              <ul class="space-y-3">
-                {#each alerts as alert}
-                  <li class="flex items-start gap-3 text-sm text-rose-700">
-                    <span class="mt-1 h-2 w-2 rounded-full bg-rose-500"></span>
-                    <span>{alert}</span>
-                  </li>
-                {/each}
-              </ul>
-            {/if}
-          </div>
-        </div>
-      </section>
+    <div class="max-w-7xl mx-auto py-2">
+      <PIDashboard />
     </div>
   </Layout>
 {:else if financeView}
@@ -451,7 +145,7 @@
             <button
               class="ml-auto px-4 py-2 text-xs font-semibold rounded-full border border-gray-200 text-gray-700"
               type="button"
-              on:click={loadFinanceDashboard}
+              onclick={loadFinanceDashboard}
               disabled={financeLoading}
             >
               {financeLoading ? "Refreshing…" : "Refresh data"}
@@ -516,7 +210,7 @@
               <button
                 class="text-sm font-semibold text-blue-600"
                 type="button"
-                on:click={() => router.goToPendingExpenses()}
+                onclick={() => router.goToPendingExpenses()}
               >
                 Open pending expenses →
               </button>
@@ -528,11 +222,34 @@
                 >
                   <div>
                     <p class="font-semibold text-gray-900">{item.grant}</p>
-                    <p class="text-xs text-gray-500">{item.stage}</p>
+                    {#if item.is_disbursement}
+                      <span class={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                        item.type === 'single' ? 'bg-blue-100 text-blue-700' :
+                        item.type === 'milestone' ? 'bg-purple-100 text-purple-700' :
+                        'bg-emerald-100 text-emerald-700'
+                      }`}>
+                        {item.type === 'single' ? 'Full Payment' : 
+                         item.type === 'milestone' ? 'Milestone Release' : 
+                         'Tranche Due'}
+                      </span>
+                      <p class="text-xs text-gray-500 mt-1">{item.stage}</p>
+                    {:else}
+                      <p class="text-xs text-gray-500">{item.stage}</p>
+                    {/if}
                   </div>
-                  <div class="text-right">
-                    <p class="font-semibold">{toUSD(item.amount / 1000)}K</p>
-                    <p class="text-xs text-gray-500">{item.age}</p>
+                  <div class="flex items-center gap-4">
+                    <div class="text-right">
+                      <p class="font-semibold">{toUSD(item.amount)}</p>
+                      <p class="text-xs text-gray-500">{item.age}</p>
+                    </div>
+                    {#if item.is_disbursement}
+                      <button 
+                        onclick={() => releaseDisbursement(item)}
+                        class="px-3 py-1.5 bg-gray-900 text-white text-[10px] font-bold rounded-lg hover:bg-emerald-600 transition-colors"
+                      >
+                        Release
+                      </button>
+                    {/if}
                   </div>
                 </div>
               {/each}
@@ -554,7 +271,7 @@
               <button
                 class="text-sm font-semibold text-blue-600"
                 type="button"
-                on:click={() => router.goToApprovedTransactions()}
+                onclick={() => router.goToApprovedTransactions()}
               >
                 View approvals →
               </button>
@@ -712,7 +429,7 @@
       </p>
       <button
         class="mt-6 px-4 py-2 rounded-xl bg-blue-600 text-white"
-        on:click={() =>
+        onclick={() =>
           router.goToRoleHome?.($user?.role) ?? router.goToLogin()}
       >
         Go to my workspace

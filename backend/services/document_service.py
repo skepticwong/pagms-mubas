@@ -75,7 +75,7 @@ class DocumentService:
         Sync files from Grant and EvidenceSubmission tables into Document table.
         This is idempotent and runs before retrieval.
         """
-        from models import EvidenceSubmission, Task, Milestone
+        from models import DeliverableSubmission, Task, Milestone
 
         # 1. Sync Grant files
         grants_query = Grant.query
@@ -107,8 +107,8 @@ class DocumentService:
                             created_at=g.created_at or datetime.now()
                         ))
 
-        # 2. Sync Evidence Submissions
-        # We need to find evidence for tasks belonging to the grant(s)
+        # 2. Sync Deliverable Submissions
+        # We need to find deliverables for tasks belonging to the grant(s)
         tasks_query = Task.query
         if grant_id:
             tasks_query = tasks_query.filter_by(grant_id=grant_id)
@@ -116,7 +116,7 @@ class DocumentService:
         tasks = tasks_query.all()
         task_ids = [t.id for t in tasks]
         if task_ids:
-            submissions = EvidenceSubmission.query.filter(EvidenceSubmission.task_id.in_(task_ids)).all()
+            submissions = DeliverableSubmission.query.filter(DeliverableSubmission.task_id.in_(task_ids)).all()
             for sub in submissions:
                 task = next((t for t in tasks if t.id == sub.task_id), None)
                 if not task: continue
@@ -127,13 +127,13 @@ class DocumentService:
                     paths = sub.document_paths.split(',')
                     for p in paths:
                         if p.strip():
-                            files_to_sync.append((p.strip(), 'Evidence Document'))
+                            files_to_sync.append((p.strip(), 'Deliverable Document'))
                 
                 if sub.photo_path:
-                    files_to_sync.append((sub.photo_path, 'Evidence Photo'))
+                    files_to_sync.append((sub.photo_path, 'Deliverable Photo'))
                 
                 for filename, doc_type in files_to_sync:
-                    rel_path = f"evidence/{filename}"
+                    rel_path = f"deliverables/{filename}"
                     existing = Document.query.filter_by(grant_id=task.grant_id, file_path=rel_path).first()
                     if not existing:
                         db.session.add(Document(
@@ -168,7 +168,7 @@ class DocumentService:
         elif role == 'Team':
             query = query.filter(or_(
                 Document.uploader_id == user_id,
-                Document.doc_type.in_(['Award Letter', 'Final Report', 'Milestone Evidence'])
+                Document.doc_type.in_(['Award Letter', 'Final Report', 'Milestone Deliverable'])
             ))
         elif role == 'Finance':
             query = query.filter(Document.doc_type.in_(['Expense Receipt', 'Budget Breakdown', 'Award Letter']))
@@ -203,7 +203,7 @@ class DocumentService:
                     Document.uploader_id == user_id,
                     db.and_(
                         Grant.team_members.any(user_id=user_id),
-                        Document.doc_type.in_(['Award Letter', 'Final Report', 'Milestone Evidence'])
+                        Document.doc_type.in_(['Award Letter', 'Final Report', 'Milestone Deliverable'])
                     )
                 )
             ).order_by(Document.created_at.desc()).all()

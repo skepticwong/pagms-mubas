@@ -20,7 +20,7 @@
   // Stats
   $: todayCount = auditLogs.filter((log) => isToday(log.timestamp)).length;
   $: evidenceCount = auditLogs.filter((log) =>
-    log.action.includes("evidence"),
+    log.action.includes("evidence") || log.action.includes("deliverable"),
   ).length;
   $: expenseCount = auditLogs.filter((log) =>
     log.action.includes("expense"),
@@ -114,7 +114,7 @@
   }
 
   function getActionIcon(action) {
-    if (action.includes("evidence")) return "📋";
+    if (action.includes("evidence") || action.includes("deliverable")) return "📋";
     if (action.includes("expense")) return "💰";
     if (action.includes("task")) return "✓";
     if (action.includes("grant")) return "📁";
@@ -176,22 +176,22 @@
 
     <!-- Stats Cards -->
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-      <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
+      <div class="bg-white/70 backdrop-blur-xl p-4 rounded-2xl shadow-md border border-white/60">
         <h3 class="font-medium text-gray-900">Today's Activity</h3>
         <p class="text-3xl mt-2 font-bold text-blue-700">{todayCount}</p>
         <p class="text-xs text-gray-500 mt-1">Actions logged today</p>
       </div>
-      <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
-        <h3 class="font-medium text-gray-900">Evidence Actions</h3>
+      <div class="bg-white/70 backdrop-blur-xl p-4 rounded-2xl shadow-md border border-white/60">
+        <h3 class="font-medium text-gray-900">Deliverable Actions</h3>
         <p class="text-3xl mt-2 font-bold text-green-600">{evidenceCount}</p>
         <p class="text-xs text-gray-500 mt-1">Submissions & approvals</p>
       </div>
-      <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
+      <div class="bg-white/70 backdrop-blur-xl p-4 rounded-2xl shadow-md border border-white/60">
         <h3 class="font-medium text-gray-900">Expense Actions</h3>
         <p class="text-3xl mt-2 font-bold text-amber-600">{expenseCount}</p>
         <p class="text-xs text-gray-500 mt-1">Claims & approvals</p>
       </div>
-      <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
+      <div class="bg-white/70 backdrop-blur-xl p-4 rounded-2xl shadow-md border border-white/60">
         <h3 class="font-medium text-gray-900">Team Actions</h3>
         <p class="text-3xl mt-2 font-bold text-indigo-700">{teamActionCount}</p>
         <p class="text-xs text-gray-500 mt-1">By team members</p>
@@ -298,11 +298,11 @@
       </div>
     {:else}
       <div
-        class="bg-white rounded-lg shadow-sm border border-gray-100 overflow-hidden"
+        class="bg-white/70 backdrop-blur-xl rounded-2xl shadow-md border border-white/60 overflow-hidden"
       >
         <div class="overflow-x-auto">
           <table class="w-full">
-            <thead class="bg-gray-50 border-b border-gray-200">
+            <thead class="bg-white/50 border-b border-white/60 backdrop-blur-sm">
               <tr>
                 <th
                   class="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider"
@@ -387,7 +387,7 @@
           </table>
         </div>
         <div
-          class="px-6 py-3 bg-gray-50 border-t border-gray-200 text-sm text-gray-600"
+          class="px-6 py-3 bg-white/40 backdrop-blur-sm border-t border-white/60 text-sm text-gray-600"
         >
           Showing {filteredLogs.length} of {auditLogs.length} logs
         </div>

@@ -5,6 +5,9 @@ from datetime import datetime
 from models import db, ExpenseClaim, Grant, User, BudgetCategory, AuditLog, PriorApprovalRequest, RuleEvaluation
 from services.grant_service import GrantService
 from services.rule_service import RuleService
+from services.effort_service import EffortService
+from services.audit_service import AuditService
+from services.health_score_service import HealthScoreService
 
 expenses_bp = Blueprint('expenses', __name__)
 
@@ -24,16 +27,37 @@ def get_expenses():
         return jsonify({'error': 'User not found'}), 404
 
     try:
-        if user.role == 'PI':
+        if user.role in ['Finance', 'RSU']:
+            # Finance/RSU see all claims
+            claims = ExpenseClaim.query
+        elif user.role == 'PI':
             # Get all grants owned by PI
             grants = Grant.query.filter_by(pi_id=user_id).all()
             grant_ids = [g.id for g in grants]
-            claims = ExpenseClaim.query.filter(ExpenseClaim.grant_id.in_(grant_ids))
+            
+            # Also get grants where the user is a Co-PI
+            from models import GrantTeam
+            co_pi_entries = GrantTeam.query.filter_by(user_id=user_id, role='Co-PI', status='active').all()
+            co_pi_grant_ids = [entry.grant_id for entry in co_pi_entries]
+            
+            all_grant_ids = list(set(grant_ids + co_pi_grant_ids))
+            claims = ExpenseClaim.query.filter(ExpenseClaim.grant_id.in_(all_grant_ids))
         elif user.role == 'Team':
-            # Team sees only THEIR OWN claims
-            claims = ExpenseClaim.query.filter_by(submitted_by=user_id)
+            # Check if they are a Co-PI on any grants (they might have system role 'Team')
+            from models import GrantTeam
+            co_pi_entries = GrantTeam.query.filter_by(user_id=user_id, role='Co-PI', status='active').all()
+            if co_pi_entries:
+                co_pi_grant_ids = [entry.grant_id for entry in co_pi_entries]
+                # See their own claims OR all claims for grants where they are Co-PI
+                claims = ExpenseClaim.query.filter(
+                    (ExpenseClaim.submitted_by == user_id) | 
+                    (ExpenseClaim.grant_id.in_(co_pi_grant_ids))
+                )
+            else:
+                # Team sees only THEIR OWN claims
+                claims = ExpenseClaim.query.filter_by(submitted_by=user_id)
         else:
-            claims = []
+            return jsonify({'expenses': []})
 
         claims = claims.order_by(ExpenseClaim.submitted_at.desc()).all()
 
@@ -105,8 +129,37 @@ def submit_expense():
         if not is_authorized:
             return jsonify({'error': 'You do not have permission to submit expenses for this grant'}), 403
 
+        # 1.5 Effort Certification Lock (Audit-Proof Enforcement Gate)
+        is_locked, lock_msg, severity = EffortService.check_spending_lock(grant_id)
+        if is_locked:
+            return jsonify({
+                'error': lock_msg,
+                'type': 'COMPLIANCE_LOCK',
+                'severity': severity
+            }), 403
+
+        # 1.6 Ethics Compliance Lock (New)
+        if grant.ethics_required and grant.ethics_status in ['PENDING_ETHICS', 'SUSPENDED_ETHICS']:
+            status_display = "pending RSU verification" if grant.ethics_status == 'PENDING_ETHICS' else "suspended due to expiry"
+            return jsonify({
+                'error': f'Ethics Compliance Lock: This grant is currently {status_display}. Financial modules are locked.',
+                'type': 'ETHICS_LOCK',
+                'ethics_status': grant.ethics_status
+            }), 403
+
         # 2. Budget Validation
         amount = float(amount)
+        
+        # 2.1 Tranche Disbursement Check (Spending Gating)
+        total_grant_spent = sum((cat.spent or 0.0) for cat in grant.categories)
+        if total_grant_spent + amount > grant.disbursed_funds:
+            return jsonify({
+                'error': 'Insufficient disbursed funds. Please wait for the next tranche release.',
+                'disbursed_funds': grant.disbursed_funds,
+                'total_spent': total_grant_spent,
+                'available_to_spend': grant.disbursed_funds - total_grant_spent
+            }), 403
+
         category = BudgetCategory.query.filter_by(grant_id=grant_id, name=category_name).first()
         if not category:
             return jsonify({'error': f'Budget category "{category_name}" not found for this grant'}), 400
@@ -125,28 +178,52 @@ def submit_expense():
             from services.grant_service import GrantService
             receipt_filename = GrantService._save_file(receipt_file, 'receipts')
 
-        # 4. Rule Engine Evaluation (Compliance Check)
+        # 4. Prior Approval Linking (Proactive Authorization)
+        prior_approval_id = request.form.get('prior_approval_id')
+        pre_approved = False
+        if prior_approval_id:
+            pa_req = PriorApprovalRequest.query.get(prior_approval_id)
+            if pa_req and pa_req.status == 'approved' and pa_req.grant_id == int(grant_id):
+                # Basic check: amount shouldn't exceed approved amount by more than 5% (buffer)
+                if amount <= (pa_req.amount * 1.05):
+                    pre_approved = True
+
+        # 5. Rule Engine Evaluation (Compliance Check 2.0)
         expense_context = {
             'category': category_name,
             'amount': amount,
             'description': description,
-            'date': expense_date_str
+            'date': expense_date_str,
+            'action_type': 'EXPENSE'
         }
-        rule_result = RuleService.evaluate_expense(expense_context, grant_id)
+        rule_result = RuleService.evaluate_action('EXPENSE', expense_context, grant_id)
         
         final_status = 'pending'
         if rule_result['outcome'] == 'BLOCK':
             reasons = "; ".join([r['guidance_text'] for r in rule_result['triggered_rules']])
+            
+            # Log BLOCK in Audit Trail
+            AuditService.log_action(
+                user_id=user_id,
+                action='EXPENSE_BLOCKED',
+                entity_type='EXPENSE',
+                entity_id=0,
+                details={'reason': reasons, 'context': expense_context}
+            )
+            
+            # Recalculate health (Penalty for block)
+            HealthScoreService.calculate_score(grant_id)
+
             return jsonify({
-                'error': 'Compliance Block: This expense is unallowable.',
+                'error': 'Compliance Block: This expense is unallowable according to funder rules.',
                 'reasons': reasons,
                 'triggered_rules': rule_result['triggered_rules']
             }), 403
         
-        if rule_result['outcome'] == 'PRIOR_APPROVAL':
+        if rule_result['outcome'] == 'PRIOR_APPROVAL' and not pre_approved:
             final_status = 'awaiting_prior_approval'
         
-        # 5. Create Expense Claim
+        # 6. Create Expense Claim
         expense_date = datetime.strptime(expense_date_str, '%Y-%m-%d').date()
         
         claim = ExpenseClaim(
@@ -159,7 +236,8 @@ def submit_expense():
             description=description,
             receipt_filename=receipt_filename,
             payment_method=payment_method,
-            status=final_status
+            status=final_status,
+            prior_approval_id=prior_approval_id if pre_approved else None
         )
         db.session.add(claim)
         db.session.flush() # Get claim.id
@@ -182,16 +260,22 @@ def submit_expense():
             )
             db.session.add(pa_request)
         
-        # 7. Log Audit Trail
-        audit_details = f'Submitted {amount} {grant.currency} for {category_name} (Grant: {grant.grant_code}). Outcome: {rule_result["outcome"]}'
-        audit = AuditLog(
+        # 7. Forensic Audit & Health Update
+        AuditService.log_action(
             user_id=user_id,
-            action='expense_submitted',
-            resource_type='expense',
-            resource_id=claim.id,
-            details=audit_details
+            action='EXPENSE_SUBMITTED',
+            entity_type='EXPENSE',
+            entity_id=claim.id,
+            details={
+                'amount': amount,
+                'category': category_name,
+                'outcome': rule_result["outcome"]
+            }
         )
-        db.session.add(audit)
+        
+        # Update health for warnings or prior approvals
+        if rule_result['outcome'] in ['WARN', 'PRIOR_APPROVAL']:
+            HealthScoreService.calculate_score(grant_id)
         
         db.session.commit()
         
@@ -234,10 +318,10 @@ def get_budget_categories(grant_id):
         is_authorized = False
         if user.role == 'PI' and grant.pi_id == user_id:
             is_authorized = True
-        elif user.role == 'Team':
+        else:
             from models import GrantTeam
-            entry = GrantTeam.query.filter_by(grant_id=grant_id, user_id=user_id).first()
-            if entry:
+            entry = GrantTeam.query.filter_by(grant_id=grant_id, user_id=user_id, status='active').first()
+            if entry and (entry.role == 'Co-PI' or user.role == 'Team' or user.role == 'Finance' or user.role == 'RSU'):
                 is_authorized = True
 
         if not is_authorized:
@@ -294,6 +378,15 @@ def update_expense(expense_id):
 
         if not is_authorized:
             return jsonify({'error': 'You do not have permission to edit this expense'}), 403
+
+        # 1.6 Ethics Compliance Lock (New)
+        if grant.ethics_required and grant.ethics_status in ['PENDING_ETHICS', 'SUSPENDED_ETHICS']:
+            status_display = "pending RSU verification" if grant.ethics_status == 'PENDING_ETHICS' else "suspended due to expiry"
+            return jsonify({
+                'error': f'Ethics Compliance Lock: This grant is currently {status_display}. Modification of expenses is locked.',
+                'type': 'ETHICS_LOCK',
+                'ethics_status': grant.ethics_status
+            }), 403
 
         # Update fields
         category_name = request.form.get('category')

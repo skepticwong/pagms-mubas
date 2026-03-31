@@ -2,6 +2,8 @@
   import { onMount } from "svelte";
   import axios from "axios";
   import Layout from "../components/Layout.svelte";
+  import { showToast } from "../stores/toast.js";
+  import { confirm } from "../stores/modals.js";
   import { router } from "../stores/router.js";
 
   axios.defaults.withCredentials = true;
@@ -70,7 +72,7 @@
   }
 
   async function approveClaim(expenseId) {
-    if (!confirm("Are you sure you want to approve this expense claim?")) {
+    if (!await confirm("Are you sure you want to approve this expense claim?")) {
       return;
     }
 
@@ -78,20 +80,21 @@
       await axios.post(
         `http://localhost:5000/api/finance/expenses/${expenseId}/approve`,
       );
-      alert("Expense approved successfully!");
+      showToast("Expense approved successfully!", "success");
       await loadClaims(); // Reload data
     } catch (err) {
       console.error("Error approving expense:", err);
-      alert(
+      showToast(
         err.response?.data?.error ||
           "Failed to approve expense. Please try again.",
+        "error"
       );
     }
   }
 
   async function escalateClaim(expenseId) {
     if (
-      !confirm("Are you sure you want to reject/escalate this expense claim?")
+      !await confirm("Are you sure you want to reject/escalate this expense claim?")
     ) {
       return;
     }
@@ -100,13 +103,14 @@
       await axios.post(
         `http://localhost:5000/api/finance/expenses/${expenseId}/reject`,
       );
-      alert("Expense rejected successfully!");
+      showToast("Expense rejected successfully!", "success");
       await loadClaims(); // Reload data
     } catch (err) {
       console.error("Error rejecting expense:", err);
-      alert(
+      showToast(
         err.response?.data?.error ||
           "Failed to reject expense. Please try again.",
+        "error"
       );
     }
   }
@@ -245,7 +249,7 @@
                 <button
                   class="px-3 py-1 rounded-xl text-xs font-semibold border border-gray-200"
                   type="button"
-                  on:click={() => router.goToReviewEvidence()}
+                  on:click={() => router.goToReviewDeliverables()}
                 >
                   View docs
                 </button>

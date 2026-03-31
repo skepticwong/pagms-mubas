@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from models import db, Grant, Rule, RuleProfile, RuleProfileSnapshot
+from models import db, Grant, Rule, FunderProfile, RuleSnapshot
 
 class RuleVersionService:
     @staticmethod
@@ -13,7 +13,7 @@ class RuleVersionService:
         if not grant or not grant.rule_profile_id:
             return None
 
-        profile = RuleProfile.query.get(grant.rule_profile_id)
+        profile = FunderProfile.query.get(grant.rule_profile_id)
         if not profile:
             return None
 
@@ -23,7 +23,7 @@ class RuleVersionService:
             if rule.is_active:
                 rules_data.append(rule.to_dict())
 
-        snapshot = RuleProfileSnapshot(
+        snapshot = RuleSnapshot(
             grant_id=grant_id,
             rule_profile_id=profile.id,
             snapshot_data=json.dumps(rules_data),

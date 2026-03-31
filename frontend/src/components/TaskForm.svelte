@@ -1,10 +1,14 @@
 <script>
   import { createEventDispatcher } from "svelte";
   import axios from "axios";
+  import TaskAssetSelector from "./TaskAssetSelector.svelte";
+
+  axios.defaults.withCredentials = true;
 
   export let grants = [];
   export let teamMembers = [];
   export let editingTask = null;
+  export let availableAssets = [];
 
   const dispatch = createEventDispatcher();
 
@@ -17,13 +21,28 @@
       ? new Date(editingTask.deadline).toISOString().substring(0, 10)
       : "",
     estimated_hours: editingTask?.estimated_hours || "",
+    milestone_id: editingTask?.milestone_id || "",
   };
+  
+  let selectedAssets = editingTask?.asset_assignments || [];
+  
+  let milestones = [];
+  let isLoadingMilestones = false;
 
   let errorMessage = "";
   let successMessage = "";
   let isSubmitting = false;
 
   const taskTypes = ["Fieldwork", "Data Analysis", "Remote Work", "Reporting"];
+
+  function validTaskId(id) {
+    const n = Number(id);
+    return Number.isInteger(n) && n > 0;
+  }
+
+  /** True when we have a persisted task to update (never PUT with a missing id). */
+  $: isUpdateMode =
+    editingTask != null && validTaskId(editingTask.id);
 
   $: if (editingTask) {
     form = {
@@ -35,7 +54,28 @@
         ? new Date(editingTask.deadline).toISOString().substring(0, 10)
         : "",
       estimated_hours: editingTask.estimated_hours || "",
+      milestone_id: editingTask.milestone_id || "",
     };
+  }
+
+  $: if (form.grant_id) {
+    fetchMilestones(form.grant_id);
+  }
+
+  async function fetchMilestones(grantId) {
+    if (!grantId) {
+      milestones = [];
+      return;
+    }
+    isLoadingMilestones = true;
+    try {
+      const res = await axios.get(`http://localhost:5000/api/grants/${grantId}/milestones`);
+      milestones = res.data || [];
+    } catch (error) {
+      console.error("Error fetching milestones for task form:", error);
+    } finally {
+      isLoadingMilestones = false;
+    }
   }
 
   async function handleSubmit() {
@@ -44,15 +84,26 @@
     isSubmitting = true;
 
     try {
+      if (editingTask != null && !isUpdateMode) {
+        errorMessage =
+          "Cannot update this task — missing id. Refresh the page and try again.";
+        return;
+      }
+
       const payload = {
         ...form,
         estimated_hours: parseFloat(form.estimated_hours),
+        asset_requirements: selectedAssets.map(asset => ({
+            asset_id: asset.asset_id,
+            quantity: asset.quantity,
+            notes: asset.notes
+        }))
       };
 
       let response;
-      if (editingTask) {
+      if (isUpdateMode) {
         response = await axios.put(
-          `http://localhost:5000/api/tasks/${editingTask.id}`,
+          `http://localhost:5000/api/tasks/${Number(editingTask.id)}`,
           payload,
         );
         successMessage = "Task updated successfully!";
@@ -62,7 +113,7 @@
       }
 
       dispatch("taskCreated", response.data);
-      if (!editingTask) {
+      if (!isUpdateMode) {
         form = {
           grant_id: "",
           assigned_to: "",
@@ -70,6 +121,7 @@
           task_type: "Fieldwork",
           deadline: "",
           estimated_hours: "",
+          milestone_id: "",
         };
       }
     } catch (error) {
@@ -117,7 +169,7 @@
             />
           </svg>
         </span>
-        {editingTask ? "Update Task Assignment" : "Assign New Task"}
+        {isUpdateMode ? "Update Task Assignment" : "Assign New Task"}
       </h2>
       <button
         on:click={handleCancel}
@@ -240,6 +292,57 @@
             {/each}
           </select>
         </div>
+      </div>
+
+      <!-- Milestone Selection -->
+      <div class="space-y-2">
+          <label
+            for="milestone-id"
+            class="text-sm font-bold text-gray-700 ml-1 flex items-center gap-2"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke-width="2"
+              stroke="currentColor"
+              class="w-4 h-4 text-cyan-500"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.96 5.96m0 0L2.25 21l.75-6.75 6.63-6.63m0 0l.001-.001"
+              />
+            </svg>
+            Link to Milestone (Optional)
+          </label>
+          <select
+            id="milestone-id"
+            bind:value={form.milestone_id}
+            class="w-full px-4 py-3.5 rounded-2xl border border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none bg-gray-50/50 hover:bg-white"
+            disabled={!form.grant_id || isLoadingMilestones}
+          >
+            <option value="">-- No Milestone / General Task --</option>
+            {#each milestones as milestone}
+              <option 
+                value={milestone.id} 
+                disabled={milestone.status === 'COMPLETED'}
+              >
+                {milestone.title} {milestone.status === 'COMPLETED' ? '✓ (Completed)' : ''}
+              </option>
+            {/each}
+          </select>
+          {#if form.milestone_id && milestones.find(m => m.id === form.milestone_id)?.status === 'COMPLETED'}
+            <p class="mt-1 text-xs text-amber-600 font-medium flex items-center gap-1">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+              </svg>
+              This milestone is completed. Reopen it in the Milestones tab to add more tasks.
+            </p>
+          {/if}
+          {#if isLoadingMilestones}
+            <p class="text-xs text-blue-500 ml-1 animate-pulse">Loading project milestones...</p>
+          {/if}
       </div>
 
       <!-- Task Title -->
@@ -410,7 +513,7 @@
               ></path>
             </svg>
           {/if}
-          {editingTask ? "Update Task Assignment" : "Confirm Task Assignment"}
+          {isUpdateMode ? "Update Task Assignment" : "Confirm Task Assignment"}
         </button>
       </div>
     </form>

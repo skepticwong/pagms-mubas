@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import Layout from '../components/Layout.svelte';
+  import { showToast } from '../stores/toast.js';
 
   let loading = true;
   let search = '';
@@ -59,7 +60,7 @@
     exportBusy = true;
     setTimeout(() => {
       exportBusy = false;
-      alert('Audit trail exported (mock).');
+      showToast('Audit trail exported (mock).', 'success');
     }, 500);
   }
 

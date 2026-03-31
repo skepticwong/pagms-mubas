@@ -77,10 +77,10 @@ with app.app_context():
     # 4. Create Profiles for each funder
     for funder_name in funders:
         profile_name = f"{funder_name} Standard Compliance Profile"
-        existing_profile = RuleProfile.query.filter_by(name=profile_name).first()
+        existing_profile = FunderProfile.query.filter_by(name=profile_name).first()
         
         if not existing_profile:
-            new_profile = RuleProfile(
+            new_profile = FunderProfile(
                 name=profile_name,
                 funder_id=funder_name,
                 created_by_id=rsu_user.id,

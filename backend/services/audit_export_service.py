@@ -105,17 +105,17 @@ class AuditExportService:
         table = Table(data, colWidths=col_widths, repeatRows=1)
         table.setStyle(TableStyle([
             # Header row
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.Color(0.11764705882352941, 0.25098039215686274, 0.6862745098039215)),  # #1e40af
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
             ('FONTSIZE', (0, 0), (-1, 0), 9),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
             # Body rows
             ('FONTSIZE', (0, 1), (-1, -1), 8),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f4ff')]),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.Color(0.9411764705882353, 0.9568627450980393, 1.0)]),  # #f0f4ff
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#d1d5db')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.Color(0.8196078431372549, 0.8352941176470589, 0.8588235294117647)),  # #d1d5db
             ('TOPPADDING', (0, 1), (-1, -1), 4),
             ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
         ]))

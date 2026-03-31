@@ -2,6 +2,9 @@
     import { onMount } from "svelte";
     import axios from "axios";
     import Layout from "../components/Layout.svelte";
+    import PriorApprovalModal from "../components/PriorApprovalModal.svelte";
+    import Icon from "../components/Icon.svelte";
+    import { confirm } from "../stores/modals.js";
     import { router } from "../stores/router.js";
     import { user } from "../stores/auth.js";
 
@@ -19,12 +22,21 @@
     let grants = [];
     let budgetCategories = [];
     let expenses = [];
+    let priorApprovals = [];
+    let selectedPriorApprovalId = "";
 
     // UI state
     let loading = false;
     let error = "";
     let success = "";
     let submitting = false;
+
+    $: filteredPriorApprovals = priorApprovals.filter(pa => 
+        pa.status === 'approved' && 
+        pa.grant_id == selectedGrant && 
+        pa.category === category
+    );
+    let isPriorApprovalModalOpen = false;
 
     // FX rate (MWK to USD)
     const FX_RATE = 1705;
@@ -36,10 +48,14 @@
     $: remainingBalance = selectedCategoryData
         ? selectedCategoryData.remaining
         : 0;
+    
+    $: selectedGrantData = grants.find(g => g.id == selectedGrant);
+    $: availableDisbursedFunds = selectedGrantData ? selectedGrantData.available_disbursed_funds : 0;
 
     onMount(async () => {
         await loadGrants();
         await loadExpenses();
+        await loadPriorApprovals();
     });
 
     async function loadGrants() {
@@ -90,8 +106,21 @@
         }
     }
 
+    async function loadPriorApprovals() {
+        if (!selectedGrant) return;
+        try {
+            const response = await axios.get(
+                `http://localhost:5000/api/prior-approvals/grant/${selectedGrant}`,
+            );
+            priorApprovals = response.data || [];
+        } catch (err) {
+            console.error("Error loading prior approvals:", err);
+        }
+    }
+
     async function handleGrantChange() {
         await loadBudgetCategories();
+        await loadPriorApprovals();
     }
 
     function handleFileChange(event) {
@@ -114,8 +143,16 @@
         }
 
         const amountNum = parseFloat(amount);
+        
+        // 1. Check Budget Category Balance
         if (amountNum > remainingBalance) {
-            error = `Insufficient budget. Remaining in ${selectedCategoryData.name}: MWK ${remainingBalance.toLocaleString()}`;
+            error = `Insufficient budget in category. Remaining in ${selectedCategoryData.name}: MWK ${remainingBalance.toLocaleString()}`;
+            return;
+        }
+
+        // 2. Check Grant Disbursed Funds (Gating)
+        if (amountNum > availableDisbursedFunds) {
+            error = `Insufficient disbursed funds. Available across grant: MWK ${availableDisbursedFunds.toLocaleString()}. Please wait for next tranche.`;
             return;
         }
 
@@ -128,6 +165,9 @@
             formData.append("amount", amountNum);
             formData.append("expense_date", expenseDate);
             formData.append("description", description);
+            if (selectedPriorApprovalId) {
+                formData.append("prior_approval_id", selectedPriorApprovalId);
+            }
             formData.append("receipt", receiptFile);
 
             const res = await axios.post("http://localhost:5000/api/expenses", formData, {
@@ -141,11 +181,13 @@
             expenseDate = "";
             description = "";
             receiptFile = null;
+            selectedPriorApprovalId = "";
             document.getElementById("receipt-input").value = "";
 
             // Reload data
             await loadBudgetCategories();
             await loadExpenses();
+            await loadPriorApprovals();
         } catch (err) {
             console.error("Error submitting expense:", err);
             error = err.response?.data?.error || "Failed to submit expense";
@@ -155,7 +197,7 @@
     }
 
     async function deleteExpense(expenseId) {
-        if (!confirm("Are you sure you want to delete this expense?")) {
+        if (!await confirm("Are you sure you want to delete this expense?")) {
             return;
         }
 
@@ -192,13 +234,11 @@
     }
 
     function getStatusBadge(status) {
-        const badges = {
-            pending: "bg-amber-50 text-amber-700 border-amber-200",
-            awaiting_prior_approval: "bg-purple-50 text-purple-700 border-purple-200",
-            approved: "bg-green-50 text-green-700 border-green-200",
-            rejected: "bg-red-50 text-red-700 border-red-200",
-        };
-        return badges[status] || "bg-gray-50 text-gray-700 border-gray-200";
+        const s = status?.toLowerCase();
+        if (s === "approved" || s === "completed") return "bg-green-100 text-green-700 border-green-200";
+        if (s === "rejected" || s === "overdue" || s === "at_risk") return "bg-red-100 text-red-700 border-red-200";
+        if (s === "pending" || s === "awaiting_approval" || s === "awaiting_prior_approval") return "bg-amber-100 text-amber-700 border-amber-200";
+        return "bg-blue-100 text-blue-700 border-blue-200";
     }
 
     function getStatusIcon(status) {
@@ -231,6 +271,13 @@
                     Submit and track expenses for your grants
                 </p>
             </div>
+            <button 
+                on:click={() => isPriorApprovalModalOpen = true}
+                class="px-4 py-2 bg-purple-600 text-white rounded-xl text-sm font-semibold shadow-lg shadow-purple-100 hover:bg-purple-700 transition-all flex items-center gap-2"
+            >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                Request Prior Approval
+            </button>
         </div>
 
         {#if error}
@@ -272,6 +319,26 @@
                         {/each}
                     </select>
                 </div>
+
+                <!-- Grant Info & Disbursement Status -->
+                {#if selectedGrantData}
+                <div class="md:col-span-2 p-4 bg-blue-50 border border-blue-100 rounded-xl">
+                    <h4 class="text-xs font-bold text-blue-800 uppercase tracking-tight mb-2">Disbursement Status</h4>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <p class="text-[10px] text-blue-600 uppercase font-semibold">Total Disbursed</p>
+                            <p class="text-lg font-bold text-blue-900">MWK {(selectedGrantData.disbursed_funds || 0).toLocaleString()}</p>
+                        </div>
+                        <div>
+                            <p class="text-[10px] text-blue-600 uppercase font-semibold">Available to Spend</p>
+                            <p class="text-lg font-bold text-blue-900">MWK {(selectedGrantData.available_disbursed_funds || 0).toLocaleString()}</p>
+                        </div>
+                    </div>
+                    <p class="text-[10px] text-blue-500 mt-2 italic">
+                        Spending is gated by the amount actually disbursed to the university (Tranches).
+                    </p>
+                </div>
+                {/if}
 
                 <!-- Budget Category -->
                 <div>
@@ -371,6 +438,30 @@
                         </p>
                     {/if}
                 </div>
+
+                <!-- Prior Approval Linking -->
+                {#if filteredPriorApprovals.length > 0}
+                    <div class="md:col-span-2 p-4 bg-emerald-50 border border-emerald-100 rounded-xl animate-in fade-in slide-in-from-top-2 duration-300">
+                        <label for="pa-link" class="block text-xs font-bold text-emerald-800 mb-2 uppercase tracking-tight">
+                            Pre-Approved Authorization Found
+                        </label>
+                        <select 
+                            id="pa-link"
+                            bind:value={selectedPriorApprovalId}
+                            class="w-full px-4 py-2 bg-white border border-emerald-200 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                        >
+                            <option value="">-- Apply an approved authorization (Optional) --</option>
+                            {#each filteredPriorApprovals as pa}
+                                <option value={pa.id}>
+                                    Approved on {formatDate(pa.created_at)} - ${pa.amount.toLocaleString()} ({pa.justification.substring(0, 30)}...)
+                                </option>
+                            {/each}
+                        </select>
+                        <p class="text-[10px] text-emerald-600 mt-2 italic">
+                            Linking a pre-approved request bypassing automatic compliance holds.
+                        </p>
+                    </div>
+                {/if}
             </div>
 
             <!-- Submit Button -->
@@ -495,9 +586,10 @@
                                             <button
                                                 on:click={() =>
                                                     deleteExpense(expense.id)}
-                                                class="text-red-600 hover:text-red-800 text-sm font-medium"
+                                                class="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-xl transition-all"
+                                                title="Delete Expense"
                                             >
-                                                Delete
+                                                <Icon name="delete" size={16} />
                                             </button>
                                         {:else}
                                             <span class="text-gray-400 text-sm"
@@ -512,5 +604,57 @@
                 </div>
             {/if}
         </div>
+
+        <!-- Prior Authorization Requests (PRE-SPEND) -->
+        <div class="bg-white/70 backdrop-blur-xl border border-white/40 rounded-2xl shadow-md p-6">
+            <h2 class="text-xl font-bold text-gray-900 mb-6">Pre-Spend Authorizations</h2>
+            
+            {#if priorApprovals.length === 0}
+                <div class="text-center py-8">
+                    <p class="text-gray-500 text-sm italic">No active pre-spend authorization requests found for this grant.</p>
+                </div>
+            {:else}
+                <div class="overflow-x-auto">
+                    <table class="w-full">
+                        <thead class="bg-gray-50/50 border-b border-gray-200">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Type</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Amount</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Justification</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Status</th>
+                                <th class="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Date</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            {#each priorApprovals as req}
+                                <tr class="hover:bg-purple-50/30 transition-colors">
+                                    <td class="px-4 py-3 text-sm font-bold text-gray-700">{req.request_type}</td>
+                                    <td class="px-4 py-3 text-sm font-semibold text-purple-700">${req.amount?.toLocaleString() || '0'}</td>
+                                    <td class="px-4 py-3 text-sm text-gray-600 max-w-xs truncate">{req.justification}</td>
+                                    <td class="px-4 py-3">
+                                        <span class="px-2 py-1 text-[10px] font-bold rounded-full border 
+                                            {req.status === 'approved' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 
+                                             req.status === 'rejected' ? 'bg-red-50 text-red-700 border-red-200' : 
+                                             'bg-amber-50 text-amber-700 border-amber-200'}">
+                                            {req.status.toUpperCase()}
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-3 text-xs text-gray-400">{formatDate(req.created_at)}</td>
+                                </tr>
+                            {/each}
+                        </tbody>
+                    </table>
+                </div>
+            {/if}
+        </div>
     </div>
+
+    <PriorApprovalModal 
+        grants={grants} 
+        bind:isOpen={isPriorApprovalModalOpen}
+        on:success={() => {
+            success = "Prior approval request submitted successfully!";
+            // Optionally reload a requests list if we had one
+        }}
+    />
 </Layout>

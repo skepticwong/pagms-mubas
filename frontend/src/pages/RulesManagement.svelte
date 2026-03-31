@@ -1,6 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import { user } from "../stores/auth.js";
+  import { prompt } from "../stores/modals.js";
   import Layout from "../components/Layout.svelte";
   import Icon from "../components/Icon.svelte";
   
@@ -24,7 +25,7 @@
     id: null,
     name: "",
     rule_type: "THRESHOLD",
-    logic_config: { condition: "amount_greater_than", value: 5000, category: "equipment" },
+    logic_config: { condition: "amount_greater_than", value: 5000, category: "equipment", module: "finance" },
     outcome: "BLOCK",
     priority_level: 3,
     guidance_text: "",
@@ -48,8 +49,8 @@
     try {
       loading = true;
       const [profRes, ruleRes] = await Promise.all([
-        fetch("http://localhost:5000/api/profiles", { credentials: "include" }),
-        fetch("http://localhost:5000/api/rules", { credentials: "include" })
+        fetch("/api/profiles", { credentials: "include" }),
+        fetch("/api/rules", { credentials: "include" })
       ]);
       
       if (profRes.ok) profiles = await profRes.json();
@@ -67,7 +68,7 @@
 
   async function loadApprovals() {
     try {
-      const res = await fetch("http://localhost:5000/api/prior-approvals", { credentials: "include" });
+      const res = await fetch("/api/prior-approvals", { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         priorApprovals = data.requests;
@@ -77,7 +78,7 @@
 
   async function loadExemptions() {
     try {
-      const res = await fetch("http://localhost:5000/api/rule-exemptions", { credentials: "include" });
+      const res = await fetch("/api/rule-exemptions", { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         exemptions = data.exemptions || [];
@@ -89,10 +90,10 @@
   $: if (viewMode === 'exemptions') loadExemptions();
 
   async function resolvePA(id, decision) {
-    const justification = prompt(`Enter justification for ${decision}:`);
+    const justification = await prompt(`Enter justification for ${decision}:`);
     if (!justification) return;
     try {
-      const res = await fetch(`http://localhost:5000/api/prior-approvals/${id}/resolve`, {
+      const res = await fetch(`/api/prior-approvals/${id}/resolve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -107,7 +108,7 @@
 
   async function saveExemption() {
     try {
-      const res = await fetch("http://localhost:5000/api/rule-exemptions", {
+      const res = await fetch("/api/rule-exemptions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -150,10 +151,13 @@
     error = ""; success = "";
     try {
       const isNew = !ruleForm.id;
-      const url = isNew ? "http://localhost:5000/api/rules" : `http://localhost:5000/api/rules/${ruleForm.id}`;
+      const url = isNew ? "/api/rules" : `/api/rules/${ruleForm.id}`;
       const method = isNew ? "POST" : "PATCH";
       
-      const payload = { ...ruleForm };
+      const payload = { 
+        ...ruleForm,
+        rule_type: ruleForm.logic_config.module?.toUpperCase() || 'FINANCE'
+      };
       
       const res = await fetch(url, {
         method,
@@ -178,7 +182,7 @@
   async function saveProfile() {
     error = ""; success = "";
     try {
-      const res = await fetch("http://localhost:5000/api/profiles", {
+      const res = await fetch("/api/profiles", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -193,7 +197,7 @@
         selectedProfileId = created.id;
       } else {
         const data = await res.json();
-        error = data.error || "Failed to create profile";
+        error = data.details || data.error || "Failed to create profile";
       }
     } catch (err) {
       error = "Network error";
@@ -608,28 +612,53 @@
               <Icon name="setting" size={16} /> Logic Condition
             </h3>
             
-            <div>
-              <label class="block text-xs font-medium text-gray-500 mb-1">Category</label>
-              <select bind:value={ruleForm.logic_config.category} class="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm">
-                <option value="any">Any Category</option>
-                <option value="equipment">Equipment & Materials</option>
-                <option value="personnel">Personnel</option>
-                <option value="travel">Travel</option>
-              </select>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Module (Enforcement Area)</label>
+                <select bind:value={ruleForm.logic_config.module} class="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm">
+                  <option value="finance">Finance / Expenses</option>
+                  <option value="personnel">Personnel & Effort</option>
+                  <option value="scope">Project Scope & KPIs</option>
+                  <option value="reporting">Reporting & Deadlines</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Category</label>
+                <select bind:value={ruleForm.logic_config.category} class="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm">
+                  {#if ruleForm.logic_config.module === 'finance'}
+                    <option value="any">Any Category</option>
+                    <option value="equipment">Equipment & Materials</option>
+                    <option value="travel">Travel & Subsistence</option>
+                    <option value="consultancy">Consultancy Fees</option>
+                  {:else}
+                    <option value="none">N/A (Module-Wide)</option>
+                    <option value="critical">Critical Path</option>
+                    <option value="ancillary">Ancillary</option>
+                  {/if}
+                </select>
+              </div>
             </div>
             
             <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="block text-xs font-medium text-gray-500 mb-1">Operator</label>
                 <select bind:value={ruleForm.logic_config.condition} class="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm">
-                  <option value="amount_greater_than">&gt; Greater Than</option>
-                  <option value="amount_less_than">&lt; Less Than</option>
-                  <option value="equals">== Equals</option>
+                  <optgroup label="Numerical (Finance/Scope)">
+                    <option value="amount_greater_than">&gt; Greater Than</option>
+                    <option value="amount_less_than">&lt; Less Than</option>
+                    <option value="equals">== Equals</option>
+                  </optgroup>
+                  <optgroup label="Status/Text (Personnel/Reporting)">
+                    <option value="is_missing">Is Missing/Incomplete</option>
+                    <option value="contains">Contains String</option>
+                    <option value="matches_role">Matches Role (Personnel)</option>
+                    <option value="at_risk">At Risk (Deadline)</option>
+                  </optgroup>
                 </select>
               </div>
               <div>
-                <label class="block text-xs font-medium text-gray-500 mb-1">Threshold Value</label>
-                <input type="number" bind:value={ruleForm.logic_config.value} class="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm">
+                <label class="block text-xs font-medium text-gray-500 mb-1">Value / Target</label>
+                <input type="text" bind:value={ruleForm.logic_config.value} class="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm" placeholder="5000 or 'manager'">
               </div>
             </div>
           </div>
@@ -709,6 +738,7 @@
     try {
       const parsed = typeof logicStr === 'string' ? JSON.parse(logicStr) : logicStr;
       let html = '';
+      if (parsed.module) html += `<span class="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded mr-2 uppercase">${parsed.module}</span> `;
       if (parsed.category) html += `<span class="text-indigo-600 font-semibold">[${parsed.category}]</span> `;
       if (parsed.condition) html += `<span class="text-gray-600">${parsed.condition.replace(/_/g, ' ')}</span> `;
       if (parsed.value) html += `<span class="text-green-600 font-bold">${parsed.value}</span>`;

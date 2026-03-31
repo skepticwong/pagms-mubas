@@ -7,16 +7,40 @@
   import CheckSquare from '../components/icons/CheckSquare.svelte';
   import FileText from '../components/icons/FileText.svelte';
 
-  let tasks = [];
-  let isLoading = true;
-  let error = '';
-  let showEvidenceModal = false;
-  let selectedTask = null;
-  let evidenceFiles = [];
-  let evidenceNotes = '';
-  let submittingEvidence = false;
-  let evidenceError = '';
-  let evidenceSuccess = '';
+  let tasks = $state([]);
+  let isLoading = $state(true);
+  let error = $state('');
+  let showDeliverablesModal = $state(false);
+  let selectedTask = $state(null);
+  let deliverableFiles = $state([]);
+  let deliverableNotes = $state('');
+  let deliverableHoursWorked = $state('');
+  let submittingDeliverables = $state(false);
+  let deliverableError = $state('');
+  let deliverableSuccess = $state('');
+  let savedHoursWorked = $state(null);
+  let myTasksOnly = $state(false); // Filter: All Tasks vs My Tasks
+
+  let currentPage = $state(1);
+  const pageSize = 10;
+
+  let filteredTasks = $derived([...(myTasksOnly
+    ? tasks.filter(t => Number(t.assigned_to) === Number($user?.id))
+    : tasks)]
+    .sort((a, b) => {
+      // Sort by created_at descending (latest first)
+      const dateA = new Date(a.created_at || a.id);
+      const dateB = new Date(b.created_at || b.id);
+      return dateB - dateA;
+    }));
+
+  let totalPages = $derived(Math.ceil(filteredTasks.length / pageSize));
+  let paginatedTasks = $derived(filteredTasks.slice((currentPage - 1) * pageSize, currentPage * pageSize));
+
+  // Reset page when filter changes
+  $effect(() => {
+    if (myTasksOnly) currentPage = 1;
+  });
 
   onMount(async () => {
     if (!$user) {
@@ -30,7 +54,7 @@
     isLoading = true;
     error = '';
     try {
-      const response = await fetch('http://localhost:5000/api/tasks', {
+      const response = await fetch('/api/tasks', {
         credentials: 'include'
       });
 
@@ -64,57 +88,76 @@
 
   function getStatusBadgeClass(status) {
     const statusLower = (status || 'assigned').toLowerCase();
-    if (statusLower === 'assigned') return 'bg-blue-100 text-blue-800';
+    if (statusLower === 'assigned' || statusLower === 'not_started') return 'bg-blue-100 text-blue-800';
     if (statusLower === 'submitted') return 'bg-amber-100 text-amber-800';
-    if (statusLower === 'approved') return 'bg-green-100 text-green-800';
-    if (statusLower === 'overdue') return 'bg-red-100 text-red-800';
+    if (statusLower === 'approved' || statusLower === 'completed') return 'bg-green-100 text-green-800';
+    if (statusLower === 'overdue' || statusLower === 'revision_requested') return 'bg-red-100 text-red-800';
     return 'bg-gray-100 text-gray-800';
   }
 
   function getStatusLabel(status) {
     const statusLower = (status || 'assigned').toLowerCase();
-    if (statusLower === 'assigned') return 'Not Started';
+    if (statusLower === 'assigned' || statusLower === 'not_started') return 'Not Started';
     if (statusLower === 'submitted') return 'Submitted';
-    if (statusLower === 'approved') return 'Approved';
+    if (statusLower === 'approved' || statusLower === 'completed') return 'Approved / Completed';
     if (statusLower === 'overdue') return 'Overdue';
+    if (statusLower === 'revision_requested') return 'Revision Requested';
+    if (statusLower === 'cancelled') return 'Cancelled';
     return status;
   }
 
-  function openEvidenceModal(task) {
-    selectedTask = task;
-    evidenceFiles = [];
-    evidenceNotes = '';
-    evidenceError = '';
-    evidenceSuccess = '';
-    showEvidenceModal = true;
+  function validTaskId(id) {
+    const n = Number(id);
+    return Number.isInteger(n) && n > 0;
   }
 
-  function closeEvidenceModal() {
-    showEvidenceModal = false;
+  function openDeliverablesModal(task) {
+    if (!validTaskId(task?.id)) {
+      console.warn('Tasks: open deliverables skipped — invalid task id', task);
+      return;
+    }
+    selectedTask = task;
+    deliverableFiles = [];
+    deliverableNotes = '';
+    deliverableHoursWorked = task?.estimated_hours ?? '';
+    deliverableError = '';
+    deliverableSuccess = '';
+    savedHoursWorked = null;
+    showDeliverablesModal = true;
+  }
+
+  function closeDeliverablesModal() {
+    showDeliverablesModal = false;
     selectedTask = null;
-    evidenceFiles = [];
-    evidenceNotes = '';
+    deliverableFiles = [];
+    deliverableNotes = '';
+    deliverableHoursWorked = '';
+    savedHoursWorked = null;
   }
 
   function handleFileChange(e) {
-    evidenceFiles = Array.from(e.target.files);
+    deliverableFiles = Array.from(e.target.files);
   }
 
-  async function submitEvidence() {
-    if (!selectedTask) return;
+  async function submitDeliverables() {
+    if (!selectedTask || !validTaskId(selectedTask.id)) {
+      deliverableError = 'Invalid task — refresh the page and try again.';
+      return;
+    }
 
-    submittingEvidence = true;
-    evidenceError = '';
-    evidenceSuccess = '';
+    submittingDeliverables = true;
+    deliverableError = '';
+    deliverableSuccess = '';
 
     try {
       const formData = new FormData();
-      evidenceFiles.forEach(file => {
+      deliverableFiles.forEach(file => {
         formData.append('files', file);
       });
-      formData.append('notes', evidenceNotes);
+      formData.append('notes', deliverableNotes);
+      formData.append('hours_worked', deliverableHoursWorked);
 
-      const response = await fetch(`http://localhost:5000/api/tasks/${selectedTask.id}/evidence`, {
+      const response = await fetch(`http://localhost:5000/api/tasks/${Number(selectedTask.id)}/deliverables`, {
         method: 'POST',
         credentials: 'include',
         body: formData
@@ -123,26 +166,27 @@
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to submit evidence');
+        throw new Error(data.error || 'Failed to submit deliverables');
       }
 
-      evidenceSuccess = 'Evidence submitted successfully!';
+      deliverableSuccess = 'Deliverables submitted successfully!';
+      savedHoursWorked = data.hours_worked ?? deliverableHoursWorked;
       
       // Refresh tasks list
       await fetchTasks();
       
       // Close modal after 2 seconds
       setTimeout(() => {
-        closeEvidenceModal();
+        closeDeliverablesModal();
       }, 2000);
     } catch (err) {
-      evidenceError = err.message || 'Failed to submit evidence';
+      deliverableError = err.message || 'Failed to submit deliverables';
     } finally {
-      submittingEvidence = false;
+      submittingDeliverables = false;
     }
   }
 
-  function canSubmitEvidence(task) {
+  function canSubmitDeliverables(task) {
     return task.status === 'assigned' || task.status === 'overdue';
   }
 </script>
@@ -163,13 +207,13 @@
           {#if $user?.role === 'PI'}
             Manage tasks across your grants
           {:else}
-            View and submit evidence for your assigned tasks
+            View and submit deliverables for your assigned tasks
           {/if}
         </p>
       </div>
       {#if $user?.role === 'PI'}
         <button
-          on:click={() => router.goToCreateTask()}
+          onclick={() => router.goToCreateTask()}
           class="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-150 shadow-sm"
         >
           <CheckSquare size={18} />
@@ -178,7 +222,21 @@
       {/if}
     </div>
 
-    <!-- Error Message -->
+    <!-- My Tasks / All Tasks toggle (PI only, allows PI to filter to their own assigned tasks) -->
+    {#if $user?.role === 'PI'}
+      <div class="mb-4 flex items-center gap-1 bg-gray-100 p-1 rounded-xl w-fit">
+        <button
+          onclick={() => myTasksOnly = false}
+          class="px-4 py-1.5 rounded-lg text-sm font-semibold transition-all {!myTasksOnly ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}"
+        >All Tasks</button>
+        <button
+          onclick={() => myTasksOnly = true}
+          class="px-4 py-1.5 rounded-lg text-sm font-semibold transition-all {myTasksOnly ? 'bg-white shadow text-blue-700' : 'text-gray-500 hover:text-gray-700'}"
+        >My Tasks</button>
+      </div>
+    {/if}
+
+
     {#if error}
       <div class="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
         <p class="text-red-700">{error}</p>
@@ -205,7 +263,7 @@
         </p>
         {#if $user?.role === 'PI'}
           <button
-            on:click={() => router.goToCreateTask()}
+            onclick={() => router.goToCreateTask()}
             class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-150"
           >
             Create New Task
@@ -224,17 +282,16 @@
                   <th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Assigned To</th>
                 {/if}
                 <th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Grant</th>
+                <th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Milestone</th>
                 <th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Task Type</th>
                 <th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Deadline</th>
                 <th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Hours</th>
                 <th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Status</th>
-                {#if $user?.role === 'Team'}
-                  <th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Action</th>
-                {/if}
+                <th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 uppercase tracking-wider">Action</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-200">
-              {#each tasks as task}
+              {#each paginatedTasks as task}
                 <tr class="hover:bg-blue-50/50 transition-colors duration-150">
                   <td class="px-6 py-4">
                     <div class="text-sm font-medium text-gray-900">{task.title}</div>
@@ -255,6 +312,9 @@
                     {/if}
                   </td>
                   <td class="px-6 py-4 whitespace-nowrap">
+                    <div class="text-sm text-gray-700">{task.milestone_title || 'General'}</div>
+                  </td>
+                  <td class="px-6 py-4 whitespace-nowrap">
                     <div class="text-sm text-gray-700">{task.task_type}</div>
                   </td>
                   <td class="px-6 py-4 whitespace-nowrap">
@@ -270,38 +330,75 @@
                       {getStatusLabel(task.status)}
                     </span>
                   </td>
-                  {#if $user?.role === 'Team'}
-                    <td class="px-6 py-4 whitespace-nowrap">
-                      {#if canSubmitEvidence(task)}
-                        <button
-                          on:click={() => openEvidenceModal(task)}
-                          class="text-blue-600 hover:text-blue-800 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 rounded px-2 py-1"
-                        >
-                          Submit Evidence
-                        </button>
-                      {:else}
-                        <span class="text-sm text-gray-500">-</span>
-                      {/if}
-                    </td>
-                  {/if}
+                  <!-- Action column: show Submit button for anyone assigned to this task with pending status -->
+                  <td class="px-6 py-4 whitespace-nowrap">
+                    {#if canSubmitDeliverables(task) && Number(task.assigned_to) === Number($user?.id)}
+                      <button
+                        onclick={() => openDeliverablesModal(task)}
+                        class="text-blue-600 hover:text-blue-800 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 rounded-lg px-3 py-1.5 bg-blue-50 hover:bg-blue-100 transition-all"
+                      >
+                        📤 Submit Work
+                      </button>
+                    {:else}
+                      <span class="text-sm text-gray-400">—</span>
+                    {/if}
+                  </td>
                 </tr>
               {/each}
             </tbody>
           </table>
         </div>
+
+        {#if totalPages > 1}
+          <div class="px-6 py-4 bg-gray-50/50 border-t border-gray-200 flex items-center justify-between">
+            <div class="text-sm text-gray-600">
+              Showing <span class="font-bold">{(currentPage - 1) * pageSize + 1}</span> to <span class="font-bold">{Math.min(currentPage * pageSize, filteredTasks.length)}</span> of <span class="font-bold">{filteredTasks.length}</span> tasks
+            </div>
+            <div class="flex items-center gap-2">
+              <button
+                onclick={() => currentPage = Math.max(1, currentPage - 1)}
+                disabled={currentPage === 1}
+                class="px-4 py-2 border border-gray-300 rounded-lg text-sm font-bold text-gray-600 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                Previous
+              </button>
+              <div class="flex items-center gap-1">
+                {#each Array(totalPages) as _, i}
+                   {#if totalPages <= 5 || (i + 1 >= currentPage - 1 && i + 1 <= currentPage + 1) || i === 0 || i === totalPages - 1}
+                     <button
+                       onclick={() => currentPage = i + 1}
+                       class="w-8 h-8 rounded-lg text-xs font-bold transition-all {currentPage === i + 1 ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500 hover:bg-gray-100'}"
+                     >
+                       {i + 1}
+                     </button>
+                   {:else if i === 1 || i === totalPages - 2}
+                     <span class="text-gray-400">...</span>
+                   {/if}
+                {/each}
+              </div>
+              <button
+                onclick={() => currentPage = Math.min(totalPages, currentPage + 1)}
+                disabled={currentPage === totalPages}
+                class="px-4 py-2 border border-gray-300 rounded-lg text-sm font-bold text-gray-600 hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        {/if}
       </div>
     {/if}
   </div>
 
-  <!-- Evidence Submission Modal -->
-  {#if showEvidenceModal && selectedTask}
-    <div class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" on:click={closeEvidenceModal}>
-      <div class="bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" on:click|stopPropagation>
+  <!-- Deliverables Submission Modal -->
+  {#if showDeliverablesModal && selectedTask}
+    <div class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onclick={closeDeliverablesModal} role="button" tabindex="0" onkeydown={(e) => e.key === 'Escape' && closeDeliverablesModal()}>
+      <div class="bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onclick={(e) => e.stopPropagation()} role="presentation">
         <div class="p-6 border-b border-gray-200">
           <div class="flex justify-between items-center">
-            <h2 class="text-2xl font-bold text-gray-900">Submit Evidence</h2>
+            <h2 class="text-2xl font-bold text-gray-900">Submit Deliverables</h2>
             <button
-              on:click={closeEvidenceModal}
+              onclick={closeDeliverablesModal}
               class="text-gray-400 hover:text-gray-600 text-2xl"
             >
               ×
@@ -311,12 +408,12 @@
         </div>
 
         <div class="p-6 space-y-6">
-          <!-- Required Evidence Instructions -->
-          {#if selectedTask.evidence_rules && selectedTask.evidence_rules.length > 0}
+          <!-- Required Deliverables Instructions -->
+          {#if selectedTask.deliverable_rules && selectedTask.deliverable_rules.length > 0}
             <div class="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-              <p class="text-sm font-semibold text-blue-900 mb-2">Required Evidence:</p>
+              <p class="text-sm font-semibold text-blue-900 mb-2">Required Deliverables:</p>
               <ul class="text-sm text-blue-800 list-disc list-inside space-y-1">
-                {#each selectedTask.evidence_rules as rule}
+                {#each selectedTask.deliverable_rules as rule}
                   <li>{rule}</li>
                 {/each}
               </ul>
@@ -324,34 +421,39 @@
           {/if}
 
           <!-- Error/Success Messages -->
-          {#if evidenceError}
+          {#if deliverableError}
             <div class="p-4 bg-red-50 border border-red-200 rounded-lg">
-              <p class="text-red-700">{evidenceError}</p>
+              <p class="text-red-700">{deliverableError}</p>
             </div>
           {/if}
 
-          {#if evidenceSuccess}
+          {#if deliverableSuccess}
             <div class="p-4 bg-green-50 border border-green-200 rounded-lg">
-              <p class="text-green-700">{evidenceSuccess}</p>
+              <p class="text-green-700">{deliverableSuccess}</p>
+              {#if savedHoursWorked !== null}
+                <p class="text-xs text-green-700 mt-1">
+                  Recorded hours: <span class="font-semibold">{savedHoursWorked}h</span>
+                </p>
+              {/if}
             </div>
           {/if}
 
           <!-- File Upload -->
           <div>
-            <label for="evidence_files" class="block text-sm font-medium text-gray-700 mb-1">
+            <label for="deliverable_files" class="block text-sm font-medium text-gray-700 mb-1">
               Upload Files *
             </label>
             <input
-              id="evidence_files"
+              id="deliverable_files"
               type="file"
               multiple
               accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv"
-              on:change={handleFileChange}
+              onchange={handleFileChange}
               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
-            {#if evidenceFiles.length > 0}
+            {#if deliverableFiles.length > 0}
               <div class="mt-2 space-y-1">
-                {#each evidenceFiles as file}
+                {#each deliverableFiles as file}
                   <p class="text-sm text-green-600">✓ {file.name}</p>
                 {/each}
               </div>
@@ -361,14 +463,33 @@
 
           <!-- Notes -->
           <div>
-            <label for="evidence_notes" class="block text-sm font-medium text-gray-700 mb-1">
+            <label for="deliverable_hours" class="block text-sm font-medium text-gray-700 mb-1">
+              Actual Hours Worked
+            </label>
+            <input
+              id="deliverable_hours"
+              type="number"
+              min="0"
+              step="0.25"
+              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              bind:value={deliverableHoursWorked}
+              placeholder="e.g. 6.5"
+            />
+            <p class="mt-1 text-xs text-gray-500">
+              Prefilled from estimated hours ({selectedTask.estimated_hours}h). Adjust to actual time spent.
+            </p>
+          </div>
+
+          <!-- Notes -->
+          <div>
+            <label for="deliverable_notes" class="block text-sm font-medium text-gray-700 mb-1">
               Activity Notes (Optional)
             </label>
             <textarea
-              id="evidence_notes"
+              id="deliverable_notes"
               rows="4"
               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              bind:value={evidenceNotes}
+              bind:value={deliverableNotes}
               placeholder="Describe the work completed, methodology used, or any relevant details..."
             ></textarea>
           </div>
@@ -376,14 +497,14 @@
           <!-- Submit Button -->
           <div class="flex gap-4 pt-4">
             <button
-              on:click={submitEvidence}
-              disabled={submittingEvidence || evidenceFiles.length === 0}
+              onclick={submitDeliverables}
+              disabled={submittingDeliverables || deliverableFiles.length === 0}
               class="flex-1 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150"
             >
-              {submittingEvidence ? 'Submitting...' : 'Submit Evidence'}
+              {submittingDeliverables ? 'Submitting...' : 'Submit Deliverables'}
             </button>
             <button
-              on:click={closeEvidenceModal}
+              onclick={closeDeliverablesModal}
               class="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500 transition-all duration-150"
             >
               Cancel

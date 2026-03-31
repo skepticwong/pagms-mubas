@@ -3,6 +3,9 @@
   import { onMount, onDestroy } from "svelte";
   import Layout from "../components/Layout.svelte";
   import Icon from "../components/Icon.svelte";
+  import RSUFinancialOverview from "../components/RSUFinancialOverview.svelte";
+  import { showToast } from "../stores/toast.js";
+  import { confirm, prompt } from "../stores/modals.js";
   import { user } from "../stores/auth.js";
   import { router } from "../stores/router.js";
   import { rsuNavTarget, clearRsuNavTarget } from "../stores/rsuNav.js";
@@ -43,6 +46,8 @@
   let priorApprovalRequests = [];
   let ruleExemptions = [];
   let exemptionForm = { grant_id: "", rule_id: "", justification: "" };
+  let effortOverrideForm = { grant_id: "", year: new Date().getFullYear(), month: new Date().getMonth() + 1, justification: "" };
+  let effortSubmitting = false;
   let activeSection = "dashboard";
 
   const sectionMeta = {
@@ -117,7 +122,7 @@
 
   $: currentSectionMeta = sectionMeta[activeSection] ?? sectionMeta.dashboard;
 
-  $: isRSU = $user?.role === "RSU";
+  $: isRSU = $user?.role?.toString().toUpperCase() === "RSU";
 
   onMount(async () => {
     if (!isRSU) {
@@ -127,10 +132,15 @@
 
     // FETCH REAL DATA
     try {
-      const res = await axios.get("http://localhost:5000/api/grants", {
+      const res = await axios.get("/api/grants", {
         withCredentials: true,
       });
-      const grants = res.data || [];
+      const grants = res.data?.grants || [];
+      
+      if (!Array.isArray(grants)) {
+        console.error('Expected grants array but got:', typeof grants, grants);
+        return;
+      }
 
       const totalFunding = grants.reduce(
         (sum, g) => sum + (g.total_budget || 0),
@@ -239,7 +249,7 @@
 
   async function loadComplianceDetails() {
     try {
-      const paRes = await axios.get("http://localhost:5000/api/prior-approvals", { withCredentials: true });
+      const paRes = await axios.get("/api/prior-approvals", { withCredentials: true });
       priorApprovalRequests = paRes.data.requests;
     } catch (err) {
       console.error("Failed to load compliance details", err);
@@ -251,54 +261,72 @@
   }
 
   async function resolvePriorApproval(requestId, decision) {
-    const justification = prompt(`Enter justification for ${decision}:`);
+    const justification = await prompt(`Enter justification for ${decision}:`);
     if (!justification) return;
 
     try {
-      await axios.post(`http://localhost:5000/api/prior-approvals/${requestId}/resolve`, {
+      await axios.post(`/api/prior-approvals/${requestId}/resolve`, {
         decision,
         justification
       }, { withCredentials: true });
-      alert("Resolution recorded.");
+      showToast("Resolution recorded.", "success");
       loadComplianceDetails();
     } catch (err) {
-      alert("Failed to resolve: " + (err.response?.data?.error || err.message));
+      showToast("Failed to resolve: " + (err.response?.data?.error || err.message), "error");
     }
   }
 
   async function submitExemption() {
     if (!exemptionForm.grant_id || !exemptionForm.rule_id || !exemptionForm.justification) {
-      alert("All fields required");
+      showToast("All fields required", "error");
       return;
     }
     try {
-      await axios.post("http://localhost:5000/api/rule-exemptions", exemptionForm, { withCredentials: true });
-      alert("Exemption added successfully.");
+      await axios.post("/api/rule-exemptions", exemptionForm, { withCredentials: true });
+      showToast("Exemption added successfully.", "success");
       exemptionForm = { grant_id: "", rule_id: "", justification: "" };
     } catch (err) {
-      alert("Failed to add exemption: " + (err.response?.data?.error || err.message));
+      showToast("Failed to add exemption: " + (err.response?.data?.error || err.message), "error");
     }
   }
 
   async function approveGrant(grantId) {
-    if (!confirm("Are you sure you want to approve this grant?")) return;
+    if (!await confirm("Are you sure you want to approve this grant?")) return;
     loading = true;
     try {
       await axios.put(
-        `http://localhost:5000/api/grants/${grantId}/approve`,
+        `/api/grants/${grantId}/approve`,
         {},
         { withCredentials: true },
       );
-      alert("Grant approved successfully!");
+      showToast("Grant approved successfully!", "success");
       window.location.reload(); // Simple reload to refresh data
     } catch (err) {
       console.error("Failed to approve grant", err);
-      alert(
+      showToast(
         "Failed to approve grant: " +
           (err.response?.data?.error || err.message),
+        "error"
       );
     } finally {
       loading = false;
+    }
+  }
+
+  async function submitEffortOverride() {
+    if (!effortOverrideForm.grant_id || !effortOverrideForm.justification) {
+      showToast("Grant ID and Justification are required", "error");
+      return;
+    }
+    effortSubmitting = true;
+    try {
+      await axios.post("/api/effort/override", effortOverrideForm, { withCredentials: true });
+      showToast("Effort lock overridden successfully.", "success");
+      effortOverrideForm = { grant_id: "", year: new Date().getFullYear(), month: new Date().getMonth() + 1, justification: "" };
+    } catch (err) {
+      showToast("Failed to override: " + (err.response?.data?.error || err.message), "error");
+    } finally {
+      effortSubmitting = false;
     }
   }
 </script>
@@ -569,13 +597,15 @@
                 </li>
                 <li class="flex items-center justify-between">
                   <div>
-                    <p class="font-semibold text-gray-900">Ethics expiring</p>
-                    <p class="text-xs text-gray-500">Next 30 days</p>
+                    <p class="font-semibold text-gray-900">Ethics Registry</p>
+                    <p class="text-xs text-gray-500">View and verify certificates</p>
                   </div>
-                  <span
-                    class="px-3 py-1 rounded-full text-xs bg-amber-50 text-amber-700"
-                    >{rsuData.summary.compliance.ethicsExpiring}</span
+                  <button 
+                    class="px-3 py-1 rounded-full text-xs bg-amber-50 text-amber-700 hover:bg-amber-100"
+                    on:click={() => router.goToREC()}
                   >
+                    Manage →
+                  </button>
                 </li>
                 <li class="flex items-center justify-between">
                   <div>
@@ -612,6 +642,14 @@
                 >
                   <Icon name="warning" size={18} className="text-amber-500" />
                   <span>Open risk monitor</span>
+                </button>
+                <button
+                  class="w-full px-4 py-2 rounded-xl border border-gray-200 text-left font-semibold flex items-center gap-2"
+                  type="button"
+                  on:click={() => setSection("ethics-verification")}
+                >
+                  <Icon name="compliance" size={18} className="text-amber-500" />
+                  <span>Ethics verification queue</span>
                 </button>
                 <button
                   class="w-full px-4 py-2 rounded-xl border border-gray-200 text-left font-semibold flex items-center gap-2"
@@ -947,20 +985,69 @@
             class="bg-white/70 backdrop-blur-xl border border-white/60 rounded-2xl shadow-md p-6"
           >
             <h2 class="text-2xl font-semibold text-gray-900 mb-4">
+              Effort Certification Enforcement (Override)
+            </h2>
+            <div class="p-4 bg-amber-50 border border-amber-100 rounded-2xl mb-6 flex items-start gap-4">
+              <Icon name="warning" size="24" className="text-amber-500 mt-1" />
+              <div>
+                <p class="font-bold text-amber-900">Administrative Override</p>
+                <p class="text-sm text-amber-800">
+                  Use this tool to manually unlock a grant's spending if a PI is unable to certify effort (e.g., medical leave, technical error).
+                  <span class="font-bold">Every override is logged for audit compliance.</span>
+                </p>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-5 gap-4 items-end bg-gray-50/50 p-4 rounded-2xl border border-gray-100">
+              <div>
+                <label for="override-grant-id" class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Grant ID</label>
+                <input id="override-grant-id" type="number" bind:value={effortOverrideForm.grant_id} class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 15"/>
+              </div>
+              <div>
+                <label for="override-year" class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Year</label>
+                <input id="override-year" type="number" bind:value={effortOverrideForm.year} class="w-full px-3 py-2 border rounded-lg text-sm"/>
+              </div>
+              <div>
+                <label for="override-month" class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Month</label>
+                <input id="override-month" type="number" bind:value={effortOverrideForm.month} class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="1-12"/>
+              </div>
+              <div>
+                <label for="override-justification" class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Justification</label>
+                <input id="override-justification" type="text" bind:value={effortOverrideForm.justification} class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="Reason for override"/>
+              </div>
+              <button 
+                class="px-4 py-2 bg-rose-600 text-white text-sm font-bold rounded-lg hover:bg-rose-700 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                on:click={submitEffortOverride}
+                disabled={effortSubmitting}
+              >
+                {#if effortSubmitting}
+                  <Icon name="refresh" size={14} className="animate-spin" />
+                {:else}
+                  <Icon name="lock" size={14} />
+                {/if}
+                Process Override
+              </button>
+            </div>
+          </div>
+
+          <div
+            class="bg-white/70 backdrop-blur-xl border border-white/60 rounded-2xl shadow-md p-6"
+          >
+            <h2 class="text-2xl font-semibold text-gray-900 mb-4">
               Grant-specific exemptions (Whitelisting)
             </h2>
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end bg-gray-50/50 p-4 rounded-2xl border border-gray-100 mb-6">
               <div>
-                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Grant ID</label>
-                <input type="number" bind:value={exemptionForm.grant_id} class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 15"/>
+                <label for="exemption-grant-id" class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Grant ID</label>
+                <input id="exemption-grant-id" type="number" bind:value={exemptionForm.grant_id} class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 15"/>
               </div>
               <div>
-                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Rule ID</label>
-                <input type="number" bind:value={exemptionForm.rule_id} class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 3"/>
+                <label for="exemption-rule-id" class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Rule ID</label>
+                <input id="exemption-rule-id" type="number" bind:value={exemptionForm.rule_id} class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 3"/>
               </div>
               <div>
-                <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Justification</label>
-                <input type="text" bind:value={exemptionForm.justification} class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="Why whitelist?"/>
+                <label for="exemption-justification" class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Justification</label>
+                <input id="exemption-justification" type="text" bind:value={exemptionForm.justification} class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="Why whitelist?"/>
               </div>
               <button 
                 class="px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-lg hover:bg-blue-700"
@@ -1009,7 +1096,6 @@
               {/each}
             </div>
           </div>
-        </section>
       {:else if activeSection === "audit-center"}
         <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div

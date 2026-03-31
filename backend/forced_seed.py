@@ -48,7 +48,24 @@ for name, r_type, logic, outcome, priority, guidance in rules:
         rule_ids.append(exists[0])
 
 # 3. Profiles to seed (matching FUNDERS in PI screen)
-# wb, nrf, usaid, dfid, gates
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS funder_profiles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name VARCHAR(100) UNIQUE NOT NULL,
+        funder_id VARCHAR(50) UNIQUE,
+        version_number INTEGER DEFAULT 1,
+        is_active BOOLEAN DEFAULT 1,
+        created_by_id INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(created_by_id) REFERENCES users(id)
+    )
+""")
+
+# Ensure version_number exists if table was created previously without it
+try:
+    cursor.execute("ALTER TABLE funder_profiles ADD COLUMN version_number INTEGER DEFAULT 1")
+except: pass
+
 funders = [
     ("World Bank Standard Profile", "wb"),
     ("NRF Compliance Profile", "nrf"),
@@ -59,26 +76,24 @@ funders = [
 ]
 
 for p_name, f_id in funders:
-    cursor.execute("SELECT id FROM rule_profiles WHERE funder_id=?", (f_id,))
+    cursor.execute("SELECT id FROM funder_profiles WHERE funder_id=?", (f_id,))
     if not cursor.fetchone():
         cursor.execute("""
-            INSERT INTO rule_profiles (name, funder_id, version_number, is_active, created_by_id)
+            INSERT INTO funder_profiles (name, funder_id, version_number, is_active, created_by_id)
             VALUES (?, ?, 1, 1, ?)
         """, (p_name, f_id, rsu_id))
         p_id = cursor.lastrowid
         
-        # Link rules (M2M table might be rule_profile_rules or similar)
-        # Check table name
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='profile_rules'")
-        table_name = 'profile_rules' if cursor.fetchone() else 'rule_profile_rules'
-        
-        # Determine table name from models (it's rule_profile_rules for RuleProfile.rules)
-        # Actually checking RuleProfile model in models.py L1638: rule_profile_rules
+        # Link rules (M2M table might be funder_profile_rules)
+        # Determine table name from models
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='funder_profile_rules'")
+        table_name = 'funder_profile_rules' if cursor.fetchone() else 'rule_profile_rules'
         
         for r_id in rule_ids:
             try:
-                cursor.execute(f"INSERT INTO rule_profile_rules (rule_profile_id, rule_id) VALUES (?, ?)", (p_id, r_id))
-            except: pass
+                cursor.execute(f"INSERT INTO {table_name} (funder_profile_id, rule_id) VALUES (?, ?)", (p_id, r_id))
+            except Exception as e:
+                print(f"Error linking rule {r_id} to profile {p_id}: {e}")
             
         print(f"Seeded Profile: {p_name} for {f_id}")
 

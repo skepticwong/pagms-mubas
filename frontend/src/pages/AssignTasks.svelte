@@ -18,12 +18,13 @@
 
   async function fetchInitialData() {
     try {
+      const cfg = { withCredentials: true };
       const [grantsRes, teamMembersRes, tasksRes] = await Promise.all([
-        axios.get("http://localhost:5000/api/grants"),
-        axios.get("http://localhost:5000/api/team-members"), // Corrected endpoint
-        axios.get("http://localhost:5000/api/tasks"),
+        axios.get("http://localhost:5000/api/grants", cfg),
+        axios.get("http://localhost:5000/api/team-members", cfg),
+        axios.get("http://localhost:5000/api/tasks", cfg),
       ]);
-      grants = grantsRes.data || [];
+      grants = grantsRes.data.grants || [];
       teamMembers = teamMembersRes.data.team_members || [];
       tasks = tasksRes.data.tasks || [];
     } catch (error) {
@@ -42,7 +43,13 @@
     showTaskForm = false;
   }
 
-  function handleEditTask(task) {
+  function handleEditTask(event) {
+    const task = event?.detail;
+    const id = Number(task?.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      console.warn("AssignTasks: edit ignored — invalid task id", task);
+      return;
+    }
     editingTask = task;
     showTaskForm = true;
   }
@@ -122,7 +129,7 @@
             <TaskList
               {tasks}
               on:editTask={handleEditTask}
-              on:deleteTask={handleTaskDeleted}
+              on:taskDeleted={handleTaskDeleted}
             />
           </div>
         {/if}

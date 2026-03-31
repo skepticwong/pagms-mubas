@@ -6,3 +6,5 @@ from .transaction_repository import TransactionRepository
 from .exchange_rate_repository import ExchangeRateRepository
 from .task_repository import TaskRepository
 from .audit_repository import AuditRepository
+from .virement_repository import VirementRepository
+from .workflow_repository import WorkflowRepository

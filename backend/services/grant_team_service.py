@@ -1,10 +1,12 @@
 from models import db, Grant, User, GrantTeam, PriorApprovalRequest
 from datetime import datetime
 from services.rule_service import RuleService
+from services.audit_service import AuditService
+from services.health_score_service import HealthScoreService
 
 class GrantTeamService:
     @staticmethod
-    def add_team_member_to_grant(grant_id, user_id, role, caller_id):
+    def add_team_member_to_grant(grant_id, user_id, role, caller_id, budget_authority=False):
         # 1. Authorization: Only the PI of the grant can add team members
         grant = Grant.query.get(grant_id)
         if not grant:
@@ -32,14 +34,15 @@ class GrantTeamService:
                 db.session.commit()
                 return existing_entry
 
-        # 3. Rule Engine Evaluation (Compliance Check)
+        # 3. Rule Engine Evaluation (Compliance Check 2.0)
         member_data = {
             'role': role,
             'user_id': user_id,
             'user_name': user.name,
-            'user_email': user.email
+            'user_email': user.email,
+            'action_type': 'PERSONNEL_ADDITION'
         }
-        rule_result = RuleService.check_personnel_change(grant_id, member_data, "addition")
+        rule_result = RuleService.evaluate_action('PERSONNEL', member_data, grant_id, user_id=caller_id)
         
         if rule_result['outcome'] == 'BLOCK':
             reasons = "; ".join([r['guidance_text'] for r in rule_result['triggered_rules']])
@@ -55,24 +58,28 @@ class GrantTeamService:
             user_id=user_id,
             role=role,
             date_added=datetime.utcnow(),
-            status=final_status
+            status=final_status,
+            budget_authority=budget_authority
         )
         db.session.add(new_member)
         db.session.flush() # Get ID
 
-        # 5. Handle Prior Approval Request if needed
-        if rule_result['outcome'] == 'PRIOR_APPROVAL':
-            eval_ids = rule_result.get('evaluation_ids', [])
-            pa_request = PriorApprovalRequest(
-                grant_id=grant_id,
-                requester_id=caller_id,
-                request_type='PERSONNEL',
-                target_id=new_member.id,
-                rule_evaluation_id=eval_ids[0] if eval_ids else None,
-                status='pending',
-                justification=f"Adding {user.name} as {role}."
-            )
-            db.session.add(pa_request)
+        # 6. Forensic Audit & Health Update
+        AuditService.log_action(
+            user_id=caller_id,
+            action='TEAM_MEMBER_ADDED',
+            entity_type='PERSONNEL',
+            entity_id=new_member.id,
+            details={
+                'member_user_id': user_id,
+                'role': role,
+                'outcome': rule_result['outcome']
+            }
+        )
+        
+        # Update health for significant events
+        if rule_result['outcome'] in ['BLOCK', 'PRIOR_APPROVAL', 'WARN']:
+            HealthScoreService.calculate_score(grant_id)
         
         db.session.commit()
         return new_member
@@ -91,9 +98,10 @@ class GrantTeamService:
         member_data = {
             'role': role,
             'user_id': user_id,
-            'user_name': user.name
+            'user_name': user.name,
+            'action_type': 'PERSONNEL_ADDITION'
         }
-        return RuleService.check_personnel_change(grant_id, member_data, "addition")
+        return RuleService.evaluate_action('PERSONNEL', member_data, grant_id, user_id=caller_id)
 
     @staticmethod
     def remove_team_member_from_grant(grant_id, user_id, caller_id):

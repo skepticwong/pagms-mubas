@@ -1,0 +1,28 @@
+Traceback (most recent call last):
+  File "e:\Post-Award-Grant-Management-System-MUBAS (PAGMS)\pagms-mubas\backend\fetch_effort.py", line 4, in <module>
+    with urllib.request.urlopen(req) as response:
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^
+  File "E:\Users\wongani\AppData\Local\Programs\Python\Python313\Lib\urllib\request.py", line 189, in urlopen
+    return opener.open(url, data, timeout)
+           ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "E:\Users\wongani\AppData\Local\Programs\Python\Python313\Lib\urllib\request.py", line 495, in open
+    response = meth(req, response)
+  File "E:\Users\wongani\AppData\Local\Programs\Python\Python313\Lib\urllib\request.py", line 604, in http_response
+    response = self.parent.error(
+        'http', request, response, code, msg, hdrs)
+  File "E:\Users\wongani\AppData\Local\Programs\Python\Python313\Lib\urllib\request.py", line 533, in error
+    return self._call_chain(*args)
+           ~~~~~~~~~~~~~~~~^^^^^^^
+  File "E:\Users\wongani\AppData\Local\Programs\Python\Python313\Lib\urllib\request.py", line 466, in _call_chain
+    result = func(*args)
+  File "E:\Users\wongani\AppData\Local\Programs\Python\Python313\Lib\urllib\request.py", line 613, in http_error_default
+    raise HTTPError(req.full_url, code, msg, hdrs, fp)
+urllib.error.HTTPError: HTTP Error 401: UNAUTHORIZED
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "e:\Post-Award-Grant-Management-System-MUBAS (PAGMS)\pagms-mubas\backend\fetch_effort.py", line 8, in <module>
+    with open('out_fetch.txt', 'w') as f:
+         ~~~~^^^^^^^^^^^^^^^^^^^^^^
+PermissionError: [Errno 13] Permission denied: 'out_fetch.txt'

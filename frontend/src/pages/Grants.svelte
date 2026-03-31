@@ -7,6 +7,7 @@
   import { user } from "../stores/auth.js";
   import ReportModal from "../components/ReportModal.svelte";
   import DocumentTab from "../components/DocumentTab.svelte";
+import MilestonesTab from "../components/MilestonesTab.svelte";
 
   let grants = [];
   let isLoading = true;
@@ -18,23 +19,30 @@
   let reportGrant = null;
   let activeTab = "overview"; // overview, documents, tasks, expenses
 
+  const isRole = (target) => {
+    if (!$user?.role) return false;
+    const current = $user.role.toString().toUpperCase();
+    const t = target.toString().toUpperCase();
+    return current.includes(t);
+  };
+
   onMount(async () => {
-    if (!$user || $user.role !== "PI") {
+    if (!$user || (!isRole("PI") && !isRole("RSU") && !isRole("Finance"))) {
       router.goToDashboard();
       return;
     }
 
     try {
-      const res = await axios.get("http://localhost:5000/api/grants", {
+      const res = await axios.get("/api/grants", {
         withCredentials: true,
       });
       // Map backend fields to frontend expected fields
-      grants = res.data.map((g) => ({
+      grants = res.data.grants.map((g) => ({
         ...g,
         code: g.grant_code,
         total_usd: g.total_budget,
         agreement_url:
-          "http://localhost:5000/uploads/agreements/" + g.agreement_filename,
+          "/api/uploads/agreements/" + g.agreement_filename,
       }));
     } catch (err) {
       console.error(err);
@@ -181,8 +189,10 @@
                       </h2>
                       <p class="text-xs text-gray-600">
                         {grant.funder} •
-                        <span class="font-mono text-gray-700">{grant.code}</span
-                        >
+                        <span class="font-mono text-gray-700">{grant.code}</span> •
+                        <span class="font-semibold text-blue-600 uppercase tracking-tighter ml-1">
+                          {grant.disbursement_type?.replace('_', ' ') || 'standard'}
+                        </span>
                       </p>
                     </div>
                     <span
@@ -234,6 +244,27 @@
                             spentBadgeClass(grant.spent_percent)}
                         >
                           {grant.spent_percent}%
+                        </span>
+                      </div>
+                    </div>
+                    <div>
+                      <p class="font-semibold text-gray-900">Project progress</p>
+                      <div class="flex items-center gap-2 mt-1">
+                        <div
+                          class="flex-1 h-2 rounded-full bg-blue-50 overflow-hidden"
+                          aria-hidden="true"
+                        >
+                          <div
+                            class="h-2 rounded-full bg-blue-600"
+                            style={"width:" +
+                              Math.min(grant.project_progress_percentage, 100) +
+                              "%"}
+                          ></div>
+                        </div>
+                        <span
+                          class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-800"
+                        >
+                          {grant.project_progress_percentage}%
                         </span>
                       </div>
                     </div>
@@ -316,12 +347,12 @@
                       <th
                         scope="col"
                         class="px-4 py-3 text-left font-semibold text-gray-700"
-                        >% Spent</th
+                        >Next deadline</th
                       >
                       <th
                         scope="col"
                         class="px-4 py-3 text-left font-semibold text-gray-700"
-                        >Next deadline</th
+                        >Metrics</th
                       >
                       <th
                         scope="col"
@@ -339,9 +370,10 @@
                           </div>
                           <div class="text-xs text-gray-600">
                             {grant.funder} •
-                            <span class="font-mono text-gray-700"
-                              >{grant.code}</span
-                            >
+                            <span class="font-mono text-gray-700">{grant.code}</span> •
+                            <span class="font-semibold text-blue-600 uppercase tracking-tighter">
+                                {grant.disbursement_type?.replace('_', ' ') || 'standard'}
+                            </span>
                           </div>
                         </td>
                         <td class="px-4 py-3 align-top">
@@ -367,28 +399,6 @@
                           ${formatMoney(grant.total_usd)} USD<br />
                           {formatMoney(grant.total_mwk)} MWK
                         </td>
-                        <td class="px-4 py-3 align-top">
-                          <div class="flex items-center gap-2">
-                            <div
-                              class="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden"
-                              aria-hidden="true"
-                            >
-                              <div
-                                class={"h-2 rounded-full " +
-                                  spentBarClass(grant.spent_percent)}
-                                style={"width:" +
-                                  Math.min(grant.spent_percent, 100) +
-                                  "%"}
-                              ></div>
-                            </div>
-                            <span
-                              class={"px-2 py-0.5 rounded-full text-[11px] font-semibold " +
-                                spentBadgeClass(grant.spent_percent)}
-                            >
-                              {grant.spent_percent}%
-                            </span>
-                          </div>
-                        </td>
                         <td class="px-4 py-3 align-top text-xs text-gray-700">
                           {#if grant.next_deadline_date}
                             <span class="font-semibold text-gray-900"
@@ -398,6 +408,30 @@
                           {:else}
                             N/A
                           {/if}
+                        </td>
+                        <td class="px-4 py-3 align-top min-w-[140px]">
+                          <div class="space-y-2">
+                             <!-- Spent bar -->
+                             <div class="space-y-0.5">
+                                <div class="flex items-center justify-between text-[10px] font-bold">
+                                   <span class="text-gray-500 uppercase tracking-tighter">Spent</span>
+                                   <span class={spentBadgeClass(grant.spent_percent)}>{grant.spent_percent}%</span>
+                                </div>
+                                <div class="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+                                   <div class={"h-full " + spentBarClass(grant.spent_percent)} style={"width:" + Math.min(grant.spent_percent, 100) + "%"}></div>
+                                </div>
+                             </div>
+                             <!-- Progress bar -->
+                             <div class="space-y-0.5">
+                                <div class="flex items-center justify-between text-[10px] font-bold">
+                                   <span class="text-blue-500 uppercase tracking-tighter">Progress</span>
+                                   <span class="text-blue-600">{grant.project_progress_percentage}%</span>
+                                </div>
+                                <div class="h-1.5 w-full bg-blue-50 rounded-full overflow-hidden">
+                                   <div class="h-full bg-blue-600" style={"width:" + Math.min(grant.project_progress_percentage, 100) + "%"}></div>
+                                </div>
+                             </div>
+                          </div>
                         </td>
                         <td class="px-4 py-3 align-top">
                           <div class="flex flex-wrap gap-1.5">
@@ -493,6 +527,15 @@
               >
                 Expenses
               </button>
+              <button
+                on:click={() => (activeTab = "milestones")}
+                class="px-5 py-2 text-xs font-black uppercase tracking-widest rounded-xl transition-all {activeTab ===
+                'milestones'
+                  ? 'bg-white text-blue-600 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'}"
+              >
+                Milestones
+              </button>
             </div>
 
             {#if activeTab === "overview"}
@@ -557,27 +600,50 @@
                   <p class="text-sm text-gray-700">
                     {selectedGrant.exchange_rate_label}
                   </p>
-                  <div class="mt-1">
-                    <p class="text-xs font-semibold text-gray-900">% spent</p>
-                    <div class="flex items-center gap-2 mt-1">
-                      <div
-                        class="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden"
-                        aria-hidden="true"
-                      >
+                  <div class="mt-1 space-y-3">
+                    <div>
+                      <p class="text-[10px] font-black uppercase tracking-widest text-gray-500">Budget spent</p>
+                      <div class="flex items-center gap-2 mt-1">
                         <div
-                          class={"h-2 rounded-full " +
-                            spentBarClass(selectedGrant.spent_percent)}
-                          style={"width:" +
-                            Math.min(selectedGrant.spent_percent, 100) +
-                            "%"}
-                        ></div>
+                          class="flex-1 h-2 rounded-full bg-gray-100 overflow-hidden"
+                          aria-hidden="true"
+                        >
+                          <div
+                            class={"h-2 rounded-full " +
+                              spentBarClass(selectedGrant.spent_percent)}
+                            style={"width:" +
+                              Math.min(selectedGrant.spent_percent, 100) +
+                              "%"}
+                          ></div>
+                        </div>
+                        <span
+                          class={"px-2 py-0.5 rounded-full text-[11px] font-semibold " +
+                            spentBadgeClass(selectedGrant.spent_percent)}
+                        >
+                          {selectedGrant.spent_percent}%
+                        </span>
                       </div>
-                      <span
-                        class={"px-2 py-0.5 rounded-full text-[11px] font-semibold " +
-                          spentBadgeClass(selectedGrant.spent_percent)}
-                      >
-                        {selectedGrant.spent_percent}%
-                      </span>
+                    </div>
+                    <div>
+                      <p class="text-[10px] font-black uppercase tracking-widest text-blue-500">Project progress</p>
+                      <div class="flex items-center gap-2 mt-1">
+                        <div
+                          class="flex-1 h-2 rounded-full bg-blue-50 overflow-hidden"
+                          aria-hidden="true"
+                        >
+                          <div
+                            class="h-2 rounded-full bg-blue-600"
+                            style={"width:" +
+                              Math.min(selectedGrant.project_progress_percentage, 100) +
+                              "%"}
+                          ></div>
+                        </div>
+                        <span
+                          class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-800"
+                        >
+                          {selectedGrant.project_progress_percentage}%
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -638,9 +704,9 @@
                     </p>
                   </div>
                   <div class="p-3 rounded-xl bg-gray-50 border border-gray-100">
-                    <p class="font-semibold text-gray-900 mb-1">Evidence</p>
+                    <p class="font-semibold text-gray-900 mb-1">Deliverables</p>
                     <p>
-                      Access verified fieldwork and activity evidence from your
+                      Access verified fieldwork and activity deliverables from your
                       team.
                     </p>
                   </div>
@@ -709,6 +775,12 @@
                   grant's budget categories.
                 </p>
               </div>
+            {:else if activeTab === "milestones"}
+              <MilestonesTab
+                grantId={selectedGrant.id}
+                grantTitle={selectedGrant.title}
+                disbursementType={selectedGrant.disbursement_type}
+              />
             {/if}
           </div>
         </section>

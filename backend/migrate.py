@@ -41,6 +41,12 @@ add_column("rules", "guidance_text", "TEXT")
 add_column("grants", "rule_profile_id", "INTEGER")
 add_column("grants", "rule_snapshot_id", "INTEGER")
 
+# grant_team
+add_column("grant_team", "status", "VARCHAR(20) DEFAULT 'active'")
+
+# rule_evaluations
+add_column("rule_evaluations", "rule_id", "INTEGER")
+
 conn.commit()
 conn.close()
 print("Migration completed.")

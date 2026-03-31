@@ -26,7 +26,7 @@
     error = "";
     try {
       const response = await axios.get(
-        "http://localhost:5000/api/evidence?status=pending",
+        "http://localhost:5000/api/deliverables?status=pending",
         {
           withCredentials: true,
         },
@@ -74,7 +74,7 @@
 
     try {
       await axios.post(
-        `http://localhost:5000/api/evidence/${id}/approve`,
+        `http://localhost:5000/api/deliverables/${id}/approve`,
         {},
         { withCredentials: true },
       );
@@ -120,7 +120,7 @@
 
     try {
       await axios.post(
-        `http://localhost:5000/api/evidence/${id}/request-revision`,
+        `http://localhost:5000/api/deliverables/${id}/request-revision`,
         { comment },
         { withCredentials: true },
       );

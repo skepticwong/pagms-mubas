@@ -1,28 +1,36 @@
-
 import sqlite3
 import os
 
-db_path = r"e:\Post-Award-Grant-Management-System-MUBAS (PAGMS)\pagms-mubas\backend\instance\pagms.db"
-log_path = r"e:\Post-Award-Grant-Management-System-MUBAS (PAGMS)\pagms-mubas\backend\final_diag.txt"
+LOG_FILE = r'e:\Post-Award-Grant-Management-System-MUBAS (PAGMS)\pagms-mubas\backend\absolute_log.txt'
+DB_FILE = r'e:\Post-Award-Grant-Management-System-MUBAS (PAGMS)\pagms-mubas\backend\instance\pagms.db'
 
 def log(msg):
-    with open(log_path, 'a') as f:
+    with open(LOG_FILE, 'a') as f:
         f.write(msg + '\n')
 
-def main():
-    if os.path.exists(log_path):
-        os.remove(log_path)
-    
-    if not os.path.exists(db_path):
-        log(f"DB not found at {db_path}")
-        return
+if os.path.exists(LOG_FILE):
+    os.remove(LOG_FILE)
 
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA table_info(expense_claims)")
-    cols = [c[1] for c in cursor.fetchall()]
-    log(f"Columns: {cols}")
-    conn.close()
+log(f"Starting absolute diagnostic...")
+log(f"DB Path: {DB_FILE}")
+log(f"DB Exists: {os.path.exists(DB_FILE)}")
 
-if __name__ == "__main__":
-    main()
+try:
+    if os.path.exists(DB_FILE):
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        
+        c.execute("SELECT id, email, role FROM users")
+        log("\n--- USERS ---")
+        for u in c.fetchall():
+            log(f"U: {u}")
+            
+        c.execute("SELECT id, grant_code, pi_id FROM grants")
+        log("\n--- GRANTS ---")
+        for g in c.fetchall():
+            log(f"G: {g}")
+            
+        conn.close()
+    log("\nDone.")
+except Exception as e:
+    log(f"\nERROR: {e}")

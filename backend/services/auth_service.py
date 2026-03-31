@@ -12,8 +12,15 @@ class AuthService:
             raise ValueError("Email and password are required")
         
         user = User.query.filter_by(email=email).first()
-        if user and user.check_password(password):
-            return user
+        if user:
+            print(f"DEBUG: Found user {user.email} with role {user.role}")
+            if user.check_password(password):
+                print(f"DEBUG: Password match for {email}")
+                return user
+            else:
+                print(f"DEBUG: Password mismatch for {email}")
+        else:
+            print(f"DEBUG: No user found for {email}")
         return None
 
     @staticmethod

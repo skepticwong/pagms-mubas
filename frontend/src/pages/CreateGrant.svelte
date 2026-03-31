@@ -1,5 +1,6 @@
 <!-- frontend/src/pages/CreateGrant.svelte -->
 <script>
+    import { onMount } from 'svelte';
     import axios from 'axios';
     import { tweened } from 'svelte/motion';
     import { cubicOut } from 'svelte/easing';
@@ -19,14 +20,16 @@
       { name: 'Contingency', allocated: '' }
     ];
 
-    const FUNDERS = [
-      { value: 'wb', label: 'World Bank' },
-      { value: 'nrf', label: 'National Research Fund' },
-      { value: 'usaid', label: 'USAID' },
-      { value: 'dfid', label: 'DFID' },
-      { value: 'gates', label: 'Gates Foundation' },
-      { value: 'other', label: 'Other (specify below)' }
-    ];
+    let funderProfiles = [];
+    
+    onMount(async () => {
+      try {
+        const response = await axios.get('/api/rule-profiles/active', { withCredentials: true });
+        funderProfiles = response.data.profiles || [];
+      } catch (err) {
+        console.error("Failed to fetch funder profiles", err);
+      }
+    });
 
     const REPORT_FREQUENCIES = [
       { value: 'monthly', label: 'Monthly' },
@@ -51,12 +54,34 @@
     let principalInvestigator = '';
     let start_date = '';
     let end_date = '';
+    let currentStep = 1;
+    let error = '';
+    let success = '';
+    let isLoading = false;
+    let validationErrors = {};
+    let showPage = true;
+    let hasInteracted = false;
 
     // Step 2: Financial Details
     let currency = 'usd';
     let total_budget = '';
     let usdToMwkRate = 1700;
     const mwkValue = tweened(0, { duration: 250, easing: cubicOut });
+    
+    // Budget calculations
+    $: totalBudgetNumber = parseFloat(total_budget) || 0;
+    $: totalAllocated = budgetCategories.reduce((sum, cat) => sum + (parseFloat(cat.allocated) || 0), 0);
+    $: budgetBalance = totalBudgetNumber - totalAllocated;
+    $: isBudgetBalanced = Math.abs(budgetBalance) <= 0.01;
+    
+    // Auto-calculate MWK Value
+    $: {
+      if (totalBudgetNumber && usdToMwkRate) {
+        mwkValue.set(totalBudgetNumber * usdToMwkRate);
+      } else {
+        mwkValue.set(0);
+      }
+    }
 
     // Step 3: Budget Categories
     let budgetCategories = [...DEFAULT_CATEGORIES];
@@ -64,9 +89,23 @@
     // Step 4: Compliance
     let financialReportingFrequency = 'quarterly';
     let progressReportingFrequency = 'biannual';
+    
+    // Ethics Compliance
+    let ethicsRequired = false;
+    let ethicsApprovalNumber = '';
+    let ethicsExpiryDate = '';
+    
     let milestones = [];
     let specialRequirements = '';
     let reportingTemplateFile = null;
+    
+    // Rule profile variables
+    let selectedRuleProfile = null;
+    let ruleGuidanceHighlights = [];
+    
+    // Milestone KPI allocation state
+    let showMilestoneKPIAllocation = false;
+    let selectedMilestoneIndex = null;
 
     // Step 5: Documents
     let agreement_file = null;
@@ -77,35 +116,172 @@
     // Step 6: Team Members
     let teamMembers = [];
 
-    // Step 7: Review & Submit
-    let currentStep = 1;
-    let error = '';
-    let success = '';
-    let isLoading = false;
-    let validationErrors = {};
-    let showPage = false;
-    let hasInteracted = false;
+    // Disbursement Model (New)
+    let disbursementType = 'single';
+    let manualTranches = [
+      { amount: '', expectedDate: '', status: 'pending' }
+    ];
 
-    // Rules Engine Integration
-    let selectedRuleProfile = null;
-    let ruleGuidanceHighlights = [];
+    // Step 7: Impact Framework (KPI Definition)
+    let grantKPIs = [];
+    let showAddKPI = false;
+    let newKPI = {
+        name: '',
+        description: '',
+        unit: 'count',
+        category: 'research',
+        grant_wide_target: '',
+        baseline_value: '0'
+    };
 
-    $: totalBudgetNumber = parseFloat(total_budget) || 0;
-    $: mwkValue.set(totalBudgetNumber * usdToMwkRate);
-    $: projectDuration = calculateDuration(start_date, end_date);
-    $: totalAllocated = budgetCategories.reduce((sum, cat) => sum + (parseFloat(cat.allocated) || 0), 0);
-    $: budgetBalance = totalBudgetNumber - totalAllocated;
-    $: isBudgetBalanced = Math.abs(budgetBalance) < 0.01;
-    
-    $: isFormValid = Object.keys(validationErrors).length === 0 &&
-      title && funder && grant_code && start_date && end_date && total_budget && agreement_file;
+    // KPI Templates for quick setup
+    const KPI_TEMPLATES = [
+        { name: 'Publications', description: 'Research papers published in peer-reviewed journals', unit: 'papers', category: 'research', target: 5 },
+        { name: 'Students Trained', description: 'Graduate students supervised and trained', unit: 'students', category: 'training', target: 3 },
+        { name: 'Workshops Conducted', description: 'Training workshops and seminars delivered', unit: 'sessions', category: 'training', target: 2 },
+        { name: 'Equipment Procured', description: 'Research equipment and instruments purchased', unit: 'items', category: 'infrastructure', target: 3 },
+        { name: 'Beneficiaries Reached', description: 'People directly impacted by the project', unit: 'people', category: 'community', target: 100 },
+        { name: 'Policy Briefs', description: 'Policy briefs submitted to government', unit: 'briefs', category: 'research', target: 2 },
+        { name: 'Data Sets', description: 'Research data sets created and shared', unit: 'datasets', category: 'research', target: 5 },
+        { name: 'Partnerships Formed', description: 'Strategic partnerships established', unit: 'partnerships', category: 'community', target: 3 }
+    ];
 
-    $: showPage = $user?.role === 'PI';
+    // KPI Management Functions
+    function addKPI() {
+      grantKPIs = [...grantKPIs, { ...newKPI }];
+      newKPI = {
+        name: '',
+        description: '',
+        unit: 'count',
+        category: 'research',
+        grant_wide_target: '',
+        baseline_value: '0'
+      };
+      showAddKPI = false;
+      markInteracted();
+    }
 
-    // Auto-fill PI name from user
+    function removeKPI(index) {
+      grantKPIs = grantKPIs.filter((_, i) => i !== index);
+      markInteracted();
+    }
+
+    function updateKPI(index, key, value) {
+      grantKPIs = grantKPIs.map((kpi, i) =>
+        i === index ? { ...kpi, [key]: value } : kpi
+      );
+      markInteracted();
+    }
+
+    function applyTemplate(template) {
+      newKPI = {
+        name: template.name,
+        description: template.description,
+        unit: template.unit,
+        category: template.category,
+        grant_wide_target: template.target.toString(),
+        baseline_value: '0'
+      };
+      markInteracted();
+    }
+
+    function applyCategoryTemplate(category) {
+      const categoryTemplates = KPI_TEMPLATES.filter(t => t.category === category);
+      categoryTemplates.forEach(template => {
+        grantKPIs = [...grantKPIs, {
+          name: template.name,
+          description: template.description,
+          unit: template.unit,
+          category: template.category,
+          grant_wide_target: template.target.toString(),
+          baseline_value: '0'
+        }];
+      });
+      markInteracted();
+    }
+
+    // Milestone KPI Allocation Functions
+    function openMilestoneKPIAllocation(index) {
+      selectedMilestoneIndex = index;
+      showMilestoneKPIAllocation = true;
+      
+      // Initialize KPI allocations for this milestone if not already done
+      if (!milestones[index].kpiAllocations) {
+        milestones[index].kpiAllocations = grantKPIs.map(kpi => ({
+          grantKpiId: kpi.id || Math.random().toString(36).substr(2, 9), // Temporary ID
+          kpiName: kpi.name,
+          kpiUnit: kpi.unit,
+          milestoneTarget: '',
+          allocationPercentage: 0
+        }));
+      }
+    }
+
+    function closeMilestoneKPIAllocation() {
+      showMilestoneKPIAllocation = false;
+      selectedMilestoneIndex = null;
+    }
+
+    function updateMilestoneKPI(milestoneIndex, kpiIndex, field, value) {
+      milestones[milestoneIndex].kpiAllocations[kpiIndex][field] = value;
+      
+      // Auto-calculate allocation percentage if milestone target is set
+      if (field === 'milestoneTarget' && value) {
+        const grantKPI = grantKPIs.find(k => k.name === milestones[milestoneIndex].kpiAllocations[kpiIndex].kpiName);
+        if (grantKPI && grantKPI.grant_wide_target) {
+          const allocationPct = (parseFloat(value) / parseFloat(grantKPI.grant_wide_target)) * 100;
+          milestones[milestoneIndex].kpiAllocations[kpiIndex].allocationPercentage = allocationPct;
+        }
+      }
+      
+      milestones = milestones; // Trigger reactivity
+    }
+
+    function autoDistributeKPIs(milestoneIndex) {
+      const milestone = milestones[milestoneIndex];
+      const totalMilestones = milestones.filter(m => m.title && m.dueDate).length;
+      
+      milestone.kpiAllocations.forEach((allocation, kpiIndex) => {
+        const grantKPI = grantKPIs.find(k => k.name === allocation.kpiName);
+        if (grantKPI && grantKPI.grant_wide_target) {
+          // Equal distribution across all milestones
+          const targetPerMilestone = parseFloat(grantKPI.grant_wide_target) / totalMilestones;
+          allocation.milestoneTarget = targetPerMilestone.toFixed(2);
+          allocation.allocationPercentage = (1 / totalMilestones) * 100;
+        }
+      });
+      
+      milestones = milestones; // Trigger reactivity
+    }
+
+    function initializeMilestoneKPIs(milestoneIndex) {
+      // Initialize KPI allocations for this milestone if not already done
+      if (!milestones[milestoneIndex].kpiAllocations || milestones[milestoneIndex].kpiAllocations.length === 0) {
+        milestones[milestoneIndex].kpiAllocations = grantKPIs.map(kpi => ({
+          grantKpiId: kpi.id || Math.random().toString(36).substr(2, 9), // Temporary ID
+          kpiName: kpi.name,
+          kpiUnit: kpi.unit,
+          milestoneTarget: '',
+          allocationPercentage: 0,
+          notes: ''
+        }));
+      }
+      milestones = milestones; // Trigger reactivity
+    }
+
+    function removeMilestoneKPI(milestoneIndex, kpiIndex) {
+      if (milestones[milestoneIndex].kpiAllocations) {
+        milestones[milestoneIndex].kpiAllocations = milestones[milestoneIndex].kpiAllocations.filter((_, i) => i !== kpiIndex);
+        milestones = milestones; // Trigger reactivity
+      }
+    }
+
+    // Step 8: Review & Submit
     $: if ($user) {
       principalInvestigator = $user.name || '';
     }
+    
+    $: projectDuration = calculateDuration(start_date, end_date);
 
     function calculateDuration(start, end) {
       if (!start || !end) return '';
@@ -279,6 +455,25 @@
       updateMilestone(index, 'evidenceFile', null);
     }
 
+    // Disbursement Helpers
+    function addTranche() {
+      manualTranches = [...manualTranches, { amount: '', expectedDate: '', status: 'pending' }];
+      markInteracted();
+    }
+
+    function removeTranche(index) {
+      if (manualTranches.length === 1) return;
+      manualTranches = manualTranches.filter((_, i) => i !== index);
+      markInteracted();
+    }
+
+    function updateTranche(index, key, value) {
+      manualTranches = manualTranches.map((t, i) => 
+        i === index ? { ...t, [key]: value } : t
+      );
+      markInteracted();
+    }
+
     function markInteracted() {
       if (!hasInteracted) hasInteracted = true;
       validateForm();
@@ -287,37 +482,30 @@
     async function handleFunderChange() {
       markInteracted();
       
-      const funderId = funder === 'other' ? '' : funder;
-      if (!funderId) {
+      if (!funder || funder === 'other') {
         selectedRuleProfile = null;
         ruleGuidanceHighlights = [];
         return;
       }
 
-      try {
-        const response = await axios.get(`http://localhost:5000/api/rule-profiles/active?funder_id=${funderId}`, { withCredentials: true });
-        if (response.data && response.data.profiles && response.data.profiles.length > 0) {
-          selectedRuleProfile = response.data.profiles[0];
-          // Extract active limits and guidance
-          ruleGuidanceHighlights = selectedRuleProfile.rules
-            .filter(r => r.is_active && r.guidance_text)
-            .map(r => ({ text: r.guidance_text, outcome: r.outcome }));
-        } else {
-          selectedRuleProfile = null;
-          ruleGuidanceHighlights = [];
-        }
-        
-        // Clear any previous manual upload when funder changes, 
-        // to let the persistent template take over if it exists.
-        reportingTemplateFile = null;
-      } catch (err) {
-        console.error("Failed to fetch rule profiles", err);
+      const profile = funderProfiles.find(p => p.id.toString() === funder.toString());
+      if (profile) {
+        selectedRuleProfile = profile;
+        // Extract active limits and guidance
+        ruleGuidanceHighlights = (profile.rules || [])
+          .filter(r => r.is_active && r.guidance_text)
+          .map(r => ({ text: r.guidance_text, outcome: r.outcome }));
+      } else {
+        selectedRuleProfile = null;
+        ruleGuidanceHighlights = [];
       }
+      
+      reportingTemplateFile = null;
     }
 
     function nextStep() {
       if (validateCurrentStep()) {
-        currentStep = Math.min(currentStep + 1, 7);
+        currentStep = Math.min(currentStep + 1, 8);
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     }
@@ -397,6 +585,9 @@
           break;
           
         case 4: // Compliance
+          // Ethics details no longer required during initialization (handled by RSU meeting)
+          break;
+
           milestones.forEach((milestone, i) => {
             // Validate if any field is filled
             if (milestone.title || milestone.dueDate || milestone.reportingPeriod || milestone.description) {
@@ -406,8 +597,35 @@
               if (!milestone.dueDate) {
                 stepErrors[`milestone_${i}_dueDate`] = 'Due date is required';
               }
+              if (disbursementType === 'milestone_based') {
+                if (!milestone.fundingAmount || parseFloat(milestone.fundingAmount) <= 0) {
+                  stepErrors[`milestone_${i}_fundingAmount`] = 'Funding amount is required';
+                }
+              }
             }
           });
+
+          if (disbursementType === 'milestone_based') {
+             const totalMilestoneFunding = milestones.reduce((sum, m) => sum + (parseFloat(m.fundingAmount) || 0), 0);
+             if (Math.abs(totalMilestoneFunding - totalBudgetNumber) > 0.01) {
+               stepErrors.milestoneFundingSum = 'Total milestone funding must equal grant budget';
+             }
+          }
+
+          if (disbursementType === 'tranches') {
+            manualTranches.forEach((tranche, i) => {
+              if (!tranche.amount || parseFloat(tranche.amount) <= 0) {
+                stepErrors[`tranche_${i}_amount`] = 'Tranche amount is required';
+              }
+              if (!tranche.expectedDate) {
+                stepErrors[`tranche_${i}_expectedDate`] = 'Expected date is required';
+              }
+            });
+            const totalTrancheFunding = manualTranches.reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0);
+            if (Math.abs(totalTrancheFunding - total_budget) > 0.01) {
+              stepErrors.trancheFundingSum = 'Total tranche funding must equal grant budget';
+            }
+          }
           break;
           
         case 5: // Documents
@@ -436,6 +654,24 @@
             }
           });
           break;
+          
+        case 7: // Impact Framework (KPI Definition)
+          if (grantKPIs.length === 0) {
+            stepErrors.grantKPIs = 'At least one KPI is required for grant tracking';
+          } else {
+            grantKPIs.forEach((kpi, i) => {
+              if (!kpi.name.trim()) {
+                stepErrors[`kpi_${i}_name`] = 'KPI name is required';
+              }
+              if (!kpi.grant_wide_target || parseFloat(kpi.grant_wide_target) <= 0) {
+                stepErrors[`kpi_${i}_target`] = 'Grant-wide target must be greater than 0';
+              }
+              if (!kpi.unit) {
+                stepErrors[`kpi_${i}_unit`] = 'Unit is required';
+              }
+            });
+          }
+          break;
       }
       
       // Update global validationErrors for the current step
@@ -453,7 +689,7 @@
       let allValid = true;
       let newValidationErrors = {};
       
-      for (let i = 1; i <= 6; i++) {
+      for (let i = 1; i <= 7; i++) {
         // We need a version of validateCurrentStep that doesn't touch global validationErrors
         // or we just call it and it updates it. Since validateForm is called only at the end
         // or on interaction, we should be careful.
@@ -484,7 +720,10 @@
       try {
         const formData = new FormData();
         formData.append('title', title.trim());
-        formData.append('funder', funder === 'other' ? funderOther.trim() : FUNDERS.find(f => f.value === funder)?.label || funder);
+        formData.append('funder_id', funder);
+        if (funder === 'other') {
+            formData.append('funder_name_other', funderOther.trim());
+        }
         formData.append('grant_code', grant_code.trim());
         formData.append('funder_reference_number', funderReferenceNumber.trim());
         formData.append('start_date', start_date);
@@ -501,6 +740,17 @@
         formData.append('financial_reporting_frequency', financialReportingFrequency);
         formData.append('progress_reporting_frequency', progressReportingFrequency);
         
+        // Add Ethics Fields
+        formData.append('ethics_required', ethicsRequired);
+        formData.append('ethics_approval_number', ethicsApprovalNumber);
+        formData.append('ethics_expiry_date', ethicsExpiryDate);
+        
+        formData.append('disbursement_type', disbursementType);
+        
+        if (disbursementType === 'tranches') {
+          formData.append('manual_tranches', JSON.stringify(manualTranches));
+        }
+        
         if (selectedRuleProfile) {
           formData.append('rule_profile_id', selectedRuleProfile.id);
         }
@@ -514,7 +764,9 @@
               description: m.description.trim(),
               due_date: m.dueDate,
               reporting_period: m.reportingPeriod,
-              status: m.status
+              funding_amount: parseFloat(m.fundingAmount || 0),
+              status: m.status,
+              kpi_allocations: m.kpiAllocations || []
             }));
           formData.append('milestones', JSON.stringify(milestonesData));
           
@@ -532,7 +784,21 @@
         if (awardLetterFile) formData.append('award_letter', awardLetterFile);
         if (ethicalApprovalFile) formData.append('ethical_approval', ethicalApprovalFile);
         if (reportingTemplateFile) formData.append('reporting_template', reportingTemplateFile);
-        
+
+        // Add KPI data
+        if (grantKPIs.length > 0) {
+          formData.append('grant_kpis', JSON.stringify(
+            grantKPIs.map(kpi => ({
+              name: kpi.name.trim(),
+              description: kpi.description.trim(),
+              unit: kpi.unit,
+              category: kpi.category,
+              grant_wide_target: parseFloat(kpi.grant_wide_target),
+              baseline_value: parseFloat(kpi.baseline_value || 0)
+            }))
+          ));
+        }
+
         if (teamMembers.length > 0) {
           formData.append('team_members', JSON.stringify(
             teamMembers
@@ -665,14 +931,14 @@
       <div class="bg-white/80 backdrop-blur-xl border border-white/40 rounded-2xl shadow-lg p-6">
         <div class="relative">
           <div class="flex justify-between items-start mb-2">
-            {#each Array(7) as _, i}
+            {#each Array(8) as _, i}
               {@const stepNum = i + 1}
               {@const isCompleted = stepNum < currentStep}
               {@const isActive = stepNum === currentStep}
               {@const isPending = stepNum > currentStep}
               
               <div class="flex flex-col items-center flex-1 relative">
-                {#if i < 6}
+                {#if i < 7}
                   <div class="progress-line {isCompleted ? 'completed' : ''}" style="left: 50%; right: -50%; width: 100%;"></div>
                 {/if}
                 
@@ -690,7 +956,7 @@
                 </button>
                 
                 <span class="text-xs mt-2 text-center font-medium max-w-[80px] {isActive ? 'text-blue-600' : 'text-gray-600'}">
-                  {['Basic Info', 'Financial', 'Budget', 'Compliance', 'Documents', 'Team', 'Review'][i]}
+                  {['Basic Info', 'Financial', 'Budget', 'Compliance', 'Documents', 'Team', 'KPIs', 'Review'][i]}
                 </span>
               </div>
             {/each}
@@ -761,9 +1027,10 @@
                   on:change={handleFunderChange}
                 >
                   <option value="">Select Funder</option>
-                  {#each FUNDERS as funderOption}
-                    <option value={funderOption.value}>{funderOption.label}</option>
+                  {#each funderProfiles as profile}
+                    <option value={profile.id}>{profile.name}</option>
                   {/each}
+                  <option value="other">Other</option>
                 </select>
                 {#if fieldError('funder')}
                   <p class="mt-1 text-sm text-red-600">{fieldError('funder')}</p>
@@ -1079,6 +1346,7 @@
               <h2 class="text-2xl font-bold text-gray-900">Compliance Rules & Reporting Schedule</h2>
               <p class="text-sm text-gray-600 mt-1">Configure reporting requirements, milestones, and special funder conditions.</p>
             </div>
+            
             <!-- Dynamic Rule Guidance -->
             {#if selectedRuleProfile && ruleGuidanceHighlights.length > 0}
               <div class="mb-8 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-6 shadow-sm">
@@ -1102,6 +1370,49 @@
                 </ul>
               </div>
             {/if}
+
+            <!-- Ethics Declaration (New) -->
+            <div class="mb-8 p-6 bg-amber-50 border border-amber-200 rounded-2xl">
+              <h3 class="text-lg font-semibold text-amber-900 mb-4 flex items-center gap-2">
+                <span class="text-xl">⚖️</span> Ethics & Compliance Declaration
+              </h3>
+              
+              <div class="space-y-4">
+                <p class="text-sm text-amber-800 leading-relaxed">
+                  Does this research project involve any of the following: <strong>Human Subjects</strong>, 
+                  <strong>Animal Research</strong>, or <strong>Hazardous Materials</strong>?
+                </p>
+                
+                <div class="flex flex-col gap-3">
+                  <label class="flex items-center gap-3 px-4 py-3 bg-white border border-amber-200 rounded-xl cursor-pointer hover:bg-amber-100 transition-colors shadow-sm">
+                    <input type="radio" value={false} bind:group={ethicsRequired} on:change={markInteracted} class="w-4 h-4 text-amber-600 focus:ring-amber-500" />
+                    <div class="flex flex-col">
+                      <span class="text-sm font-bold text-amber-900">No, no REC needed</span>
+                      <span class="text-xs text-amber-700">Project does not involve human subjects, animals, or hazardous materials.</span>
+                    </div>
+                  </label>
+                  <label class="flex items-center gap-3 px-4 py-3 bg-white border border-amber-200 rounded-xl cursor-pointer hover:bg-amber-100 transition-colors shadow-sm">
+                    <input type="radio" value={true} bind:group={ethicsRequired} on:change={markInteracted} class="w-4 h-4 text-amber-600 focus:ring-amber-500" />
+                    <div class="flex flex-col">
+                      <span class="text-sm font-bold text-amber-900">Yes, involves human/animal subjects or hazardous materials</span>
+                      <span class="text-xs text-amber-700">An REC Meeting will be scheduled by the RSU to review and approve the project ethics.</span>
+                    </div>
+                  </label>
+                </div>
+                
+                {#if ethicsRequired}
+                  <div class="mt-4 p-4 bg-amber-100/50 border border-amber-200 rounded-xl flex items-start gap-3">
+                    <div class="p-2 bg-amber-200 rounded-lg text-amber-700">
+                      <Icon name="info" size={18} />
+                    </div>
+                    <div class="text-xs text-amber-800 leading-relaxed">
+                      <strong>Important:</strong> Your grant will be created with <strong>PENDING_ETHICS</strong> status. 
+                      All financial and task modules will be locked until the RSU conducts an REC meeting and verifies the compliance requirements.
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            </div>
 
             <!-- Reporting Frequencies -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
@@ -1191,6 +1502,218 @@
               </div>
             </div>
 
+            <!-- Disbursement Model Selection (New) -->
+            <div class="mb-8 p-6 bg-blue-50 border border-blue-200 rounded-2xl">
+              <h3 class="text-lg font-semibold text-blue-900 mb-4 flex items-center gap-2">
+                <span class="text-xl">💰</span> Disbursement & Funding Model
+              </h3>
+              
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <!-- Single Payment -->
+                <label class="relative flex flex-col p-4 bg-white border {disbursementType === 'single' ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200'} rounded-xl cursor-pointer hover:border-blue-300 transition-all">
+                  <input type="radio" name="disbursementType" value="single" class="sr-only" bind:group={disbursementType} />
+                  <span class="text-sm font-bold text-gray-900 mb-1">Single Payment</span>
+                  <span class="text-xs text-gray-500">Full amount received at once upon project start.</span>
+                  {#if disbursementType === 'single'}
+                    <div class="absolute top-2 right-2 text-blue-600 font-bold text-lg">✓</div>
+                  {/if}
+                </label>
+
+                <!-- Tranches -->
+                <label class="relative flex flex-col p-4 bg-white border {disbursementType === 'tranches' ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200'} rounded-xl cursor-pointer hover:border-blue-300 transition-all">
+                  <input type="radio" name="disbursementType" value="tranches" class="sr-only" bind:group={disbursementType} />
+                  <span class="text-sm font-bold text-gray-900 mb-1">Tranches</span>
+                  <span class="text-xs text-gray-500">Manual installments defined by expected dates.</span>
+                  {#if disbursementType === 'tranches'}
+                    <div class="absolute top-2 right-2 text-blue-600 font-bold text-lg">✓</div>
+                  {/if}
+                </label>
+
+                <!-- Milestone Based -->
+                <label class="relative flex flex-col p-4 bg-white border {disbursementType === 'milestone_based' ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200'} rounded-xl cursor-pointer hover:border-blue-300 transition-all">
+                  <input type="radio" name="disbursementType" value="milestone_based" class="sr-only" bind:group={disbursementType} />
+                  <span class="text-sm font-bold text-gray-900 mb-1">Milestone-based</span>
+                  <span class="text-xs text-gray-500">Funding released upon completion of specific milestones.</span>
+                  {#if disbursementType === 'milestone_based'}
+                    <div class="absolute top-2 right-2 text-blue-600 font-bold text-lg">✓</div>
+                  {/if}
+                </label>
+              </div>
+
+              {#if disbursementType === 'tranches'}
+                <div class="space-y-4">
+                  <div class="flex justify-between items-center">
+                    <h4 class="text-sm font-bold text-blue-900 uppercase tracking-wider">Payment Schedule Configuration</h4>
+                    <button type="button" on:click={addTranche} class="text-xs font-bold text-blue-600 hover:text-blue-700 flex items-center gap-1">
+                      <Icon name="plus" size={14} />
+                      Add Installment
+                    </button>
+                  </div>
+                  
+                  {#each manualTranches as tranche, i}
+                    <div class="bg-white p-4 rounded-xl border border-blue-100 shadow-sm">
+                      <!-- Header -->
+                      <div class="flex justify-between items-center mb-4">
+                        <h5 class="text-sm font-bold text-gray-900 flex items-center gap-2">
+                          <Icon name="money" size={16} class="text-blue-600" />
+                          Installment {i + 1}
+                        </h5>
+                        <button type="button" on:click={() => removeTranche(i)} class="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors" disabled={manualTranches.length === 1}>
+                          <Icon name="trash" size={18} />
+                        </button>
+                      </div>
+                      
+                      <!-- Basic Info Grid -->
+                      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                        <div>
+                          <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Description</label>
+                          <input 
+                             type="text" 
+                             class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 transition-all"
+                             placeholder="e.g., Initial Mobilization"
+                             value={tranche.description || ''}
+                             on:input={(e) => updateTranche(i, 'description', e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Amount (USD)</label>
+                          <input 
+                             type="number" 
+                             class="w-full px-3 py-2 border {fieldError(`tranche_${i}_amount`) ? 'border-red-500' : 'border-gray-200'} rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 transition-all"
+                             placeholder="0.00"
+                             value={tranche.amount}
+                             on:input={(e) => updateTranche(i, 'amount', e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Expected Date</label>
+                          <input 
+                             type="date" 
+                             class="w-full px-3 py-2 border {fieldError(`tranche_${i}_expectedDate`) ? 'border-red-500' : 'border-gray-200'} rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 transition-all"
+                             value={tranche.expectedDate}
+                             on:input={(e) => updateTranche(i, 'expectedDate', e.target.value)}
+                          />
+                        </div>
+                      </div>
+                      
+                      <!-- NEW: Trigger Configuration -->
+                      <div class="border-t border-gray-100 pt-4">
+                        <div class="flex items-center gap-2 mb-3">
+                          <Icon name="setting" size={16} class="text-gray-600" />
+                          <label class="text-sm font-bold text-gray-900">Release Trigger</label>
+                        </div>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                          <!-- Trigger Type -->
+                          <div>
+                            <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Trigger Type</label>
+                            <select 
+                              class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 transition-all"
+                              value={tranche.trigger_type || 'milestone'}
+                              on:change={(e) => updateTranche(i, 'trigger_type', e.target.value)}
+                            >
+                              <option value="milestone">Milestone Completion</option>
+                              <option value="report">Report Submission</option>
+                              <option value="date">Specific Date</option>
+                              <option value="manual">Manual Release</option>
+                            </select>
+                          </div>
+                          
+                          <!-- Conditional Trigger Fields -->
+                          {#if tranche.trigger_type === 'milestone'}
+                            <div class="md:col-span-3">
+                              <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Required Milestone</label>
+                              <select 
+                                class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 transition-all"
+                                value={tranche.triggering_milestone_id || ''}
+                                on:change={(e) => updateTranche(i, 'triggering_milestone_id', e.target.value)}
+                              >
+                                <option value="">Select milestone...</option>
+                                {#each milestones as milestone}
+                                  <option value={milestone.id}>{milestone.title}</option>
+                                {/each}
+                              </select>
+                            </div>
+                          {:else if tranche.trigger_type === 'report'}
+                            <div class="md:col-span-3">
+                              <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Required Report Type</label>
+                              <select 
+                                class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 transition-all"
+                                value={tranche.required_report_type || ''}
+                                on:change={(e) => updateTranche(i, 'required_report_type', e.target.value)}
+                              >
+                                <option value="">Select report type...</option>
+                                <option value="financial">Financial Report</option>
+                                <option value="progress">Progress Report</option>
+                                <option value="technical">Technical Report</option>
+                              </select>
+                            </div>
+                          {:else if tranche.trigger_type === 'date'}
+                            <div class="md:col-span-3">
+                              <label class="block text-[10px] font-bold text-gray-500 uppercase mb-1">Release Date</label>
+                              <input 
+                                type="date" 
+                                class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-200 transition-all"
+                                value={tranche.trigger_date || ''}
+                                on:input={(e) => updateTranche(i, 'trigger_date', e.target.value)}
+                              />
+                            </div>
+                          {:else if tranche.trigger_type === 'manual'}
+                            <div class="md:col-span-3">
+                              <div class="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                                <p class="text-sm text-gray-600 flex items-center gap-2">
+                                  <Icon name="setting" size={16} />
+                                  This tranche will be released manually by RSU/Finance staff
+                                </p>
+                              </div>
+                            </div>
+                          {/if}
+                        </div>
+                      </div>
+                    </div>
+                  {/each}
+                  
+                  {#if fieldError('trancheFundingSum')}
+                    <p class="text-xs text-red-600 font-bold">{fieldError('trancheFundingSum')}</p>
+                  {/if}
+                  
+                  <div class="flex justify-between items-center p-3 bg-blue-100/50 rounded-lg">
+                    <span class="text-xs font-bold text-blue-800">Total Scheduled:</span>
+                    <span class="text-sm font-bold text-blue-900">
+                      ${manualTranches.reduce((sum, t) => sum + (parseFloat(t.amount) || 0), 0).toLocaleString()} 
+                      / ${totalBudgetNumber.toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              {/if}
+
+              {#if disbursementType === 'single'}
+                <div class="p-4 bg-white rounded-xl border border-blue-100 shadow-sm">
+                  <p class="text-sm text-gray-700">
+                    The full amount of <span class="font-bold text-blue-600">${totalBudgetNumber.toLocaleString()}</span> will be released in a single installment.
+                  </p>
+                </div>
+              {/if}
+              
+              {#if disbursementType === 'milestone_based'}
+                <div class="p-4 bg-white rounded-xl border border-blue-100 shadow-sm">
+                  <p class="text-sm text-gray-700 mb-1">
+                    You've selected milestone-based release. <span class="font-bold">Next Step:</span> Assign a funding amount to each milestone below.
+                  </p>
+                  {#if fieldError('milestoneFundingSum')}
+                    <p class="text-xs text-red-600 font-bold">{fieldError('milestoneFundingSum')}</p>
+                  {/if}
+                  <div class="flex justify-between items-center p-2 bg-blue-50 rounded-lg mt-2">
+                    <span class="text-xs font-bold text-blue-800">Total Assigned:</span>
+                    <span class="text-sm font-bold text-blue-900">
+                      ${milestones.reduce((sum, m) => sum + (parseFloat(m.fundingAmount) || 0), 0).toLocaleString()} 
+                      / ${totalBudgetNumber.toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+              {/if}
+            </div>
+
             <!-- Milestones Section -->
             <div class="mb-8">
               <div class="flex justify-between items-start mb-4">
@@ -1241,13 +1764,24 @@
                     <div class="border border-gray-200 rounded-lg p-6 bg-gray-50 space-y-4">
                       <div class="flex justify-between items-start">
                         <h4 class="text-sm font-semibold text-gray-900">Milestone {i + 1}</h4>
-                        <button
-                          type="button"
-                          on:click={() => removeMilestone(i)}
-                          class="text-red-600 hover:text-red-700 text-sm font-medium"
-                        >
-                          Remove
-                        </button>
+                        <div class="flex gap-2">
+                          {#if grantKPIs.length > 0}
+                            <button
+                              type="button"
+                              on:click={() => openMilestoneKPIAllocation(i)}
+                              class="px-3 py-1 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 text-xs font-medium transition-colors"
+                            >
+                              📊 Allocate KPIs
+                            </button>
+                          {/if}
+                          <button
+                            type="button"
+                            on:click={() => removeMilestone(i)}
+                            class="text-red-600 hover:text-red-700 text-sm font-medium"
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </div>
 
                       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1320,6 +1854,27 @@
                           </p>
                         </div>
 
+                        {#if disbursementType === 'milestone_based'}
+                          <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">
+                              Funding Amount (USD) <span class="text-red-500">*</span>
+                            </label>
+                            <div class="relative">
+                              <span class="absolute left-3 top-2 text-gray-500 font-medium">$</span>
+                              <input
+                                type="number"
+                                placeholder="0.00"
+                                class="w-full pl-7 pr-3 py-2 border {fieldError(`milestone_${i}_fundingAmount`) ? 'border-red-500' : 'border-gray-300'} rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                value={milestone.fundingAmount}
+                                on:input={(e) => updateMilestone(i, 'fundingAmount', e.target.value)}
+                              />
+                            </div>
+                            {#if fieldError(`milestone_${i}_fundingAmount`)}
+                              <p class="mt-1 text-xs text-red-600">{fieldError(`milestone_${i}_fundingAmount`)}</p>
+                            {/if}
+                          </div>
+                        {/if}
+
                         <!-- Status -->
                         <div>
                           <label class="block text-xs font-medium text-gray-700 mb-1">
@@ -1372,6 +1927,89 @@
                               >
                                 ✕
                               </button>
+                            </div>
+                          {/if}
+                        </div>
+
+                        <!-- Milestone KPIs -->
+                        <div class="md:col-span-2">
+                          <div class="flex justify-between items-center mb-3">
+                            <label class="block text-xs font-medium text-gray-700">
+                              Milestone KPIs & Deliverables
+                            </label>
+                            {#if grantKPIs.length > 0}
+                              <button
+                                type="button"
+                                on:click={() => initializeMilestoneKPIs(i)}
+                                class="px-3 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 text-xs font-medium transition-colors"
+                              >
+                                📊 Auto-Add Grant KPIs
+                              </button>
+                            {/if}
+                          </div>
+                          
+                          {#if grantKPIs.length === 0}
+                            <div class="p-3 bg-amber-50 border border-amber-200 rounded-md text-xs text-amber-800">
+                              ⚠️ Define grant KPIs in Step 7 first, then add them to milestones here
+                            </div>
+                          {:else}
+                            <!-- Milestone-specific KPIs -->
+                            <div class="space-y-3">
+                              {#each (milestone.kpiAllocations || []) as allocation, kpiIndex}
+                                <div class="p-3 bg-white border border-gray-200 rounded-md">
+                                  <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                    <div class="md:col-span-1">
+                                      <label class="block text-xs font-medium text-gray-700 mb-1">KPI</label>
+                                      <div class="px-2 py-1 bg-gray-50 border border-gray-200 rounded text-xs font-medium">
+                                        {allocation.kpiName}
+                                        <span class="text-gray-500 ml-1">({allocation.kpiUnit})</span>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <label class="block text-xs font-medium text-gray-700 mb-1">Target</label>
+                                      <input
+                                        type="number"
+                                        placeholder="0"
+                                        step="0.01"
+                                        class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                        value={allocation.milestoneTarget}
+                                        on:input={(e) => updateMilestoneKPI(i, kpiIndex, 'milestoneTarget', e.target.value)}
+                                      />
+                                    </div>
+                                    <div>
+                                      <label class="block text-xs font-medium text-gray-700 mb-1">Deliverable Details</label>
+                                      <textarea
+                                        rows="1"
+                                        placeholder="What will be delivered/achieved..."
+                                        class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                        value={allocation.notes || ''}
+                                        on:input={(e) => updateMilestoneKPI(i, kpiIndex, 'notes', e.target.value)}
+                                      ></textarea>
+                                    </div>
+                                  </div>
+                                  <div class="mt-2 flex justify-between items-center">
+                                    <div class="text-xs text-gray-500">
+                                      {#if allocation.milestoneTarget && grantKPIs.find(k => k.name === allocation.kpiName)?.grant_wide_target}
+                                        {((parseFloat(allocation.milestoneTarget) / parseFloat(grantKPIs.find(k => k.name === allocation.kpiName).grant_wide_target)) * 100).toFixed(1)}% of grant target
+                                      {/if}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      on:click={() => removeMilestoneKPI(i, kpiIndex)}
+                                      class="text-red-600 hover:text-red-700 text-xs font-medium"
+                                    >
+                                      Remove
+                                    </button>
+                                  </div>
+                                </div>
+                              {/each}
+                              
+                              {#if (milestone.kpiAllocations || []).length === 0}
+                                <div class="p-4 border-2 border-dashed border-gray-300 rounded-md text-center text-gray-500">
+                                  <p class="text-xs">No KPIs assigned to this milestone.</p>
+                                  <p class="text-xs text-gray-400 mt-1">Click "Auto-Add Grant KPIs" to get started</p>
+                                </div>
+                              {/if}
                             </div>
                           {/if}
                         </div>
@@ -1686,8 +2324,315 @@
           </div>
         {/if}
 
-        <!-- Step 7: Review & Submit -->
+        <!-- Step 7: Impact Framework (KPI Definition) -->
         {#if currentStep === 7}
+          <div class="bg-white/80 backdrop-blur-xl border border-white/40 rounded-2xl shadow-lg p-8">
+            <div class="border-l-4 border-blue-600 pl-4 mb-6">
+              <h2 class="text-2xl font-bold text-gray-900">Impact Framework (KPI Definition)</h2>
+              <p class="text-sm text-gray-600 mt-1">Define Key Performance Indicators that will measure grant success and impact throughout the project lifecycle.</p>
+            </div>
+
+            <!-- Quick Templates -->
+            <div class="mb-6">
+              <h3 class="text-lg font-semibold text-gray-800 mb-3">🚀 Quick Setup Templates</h3>
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <button 
+                  type="button"
+                  on:click={() => applyCategoryTemplate('research')}
+                  class="px-3 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 text-sm font-medium transition-colors"
+                >
+                  📊 Research Metrics
+                </button>
+                <button 
+                  type="button"
+                  on:click={() => applyCategoryTemplate('training')}
+                  class="px-3 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 text-sm font-medium transition-colors"
+                >
+                  👥 Training Metrics
+                </button>
+                <button 
+                  type="button"
+                  on:click={() => applyCategoryTemplate('infrastructure')}
+                  class="px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 text-sm font-medium transition-colors"
+                >
+                  🏗️ Infrastructure
+                </button>
+                <button 
+                  type="button"
+                  on:click={() => applyCategoryTemplate('community')}
+                  class="px-3 py-2 bg-orange-100 text-orange-700 rounded-lg hover:bg-orange-200 text-sm font-medium transition-colors"
+                >
+                  🌍 Community Impact
+                </button>
+              </div>
+              <p class="text-xs text-gray-500 mt-2">Click to add pre-configured KPI sets for each category</p>
+            </div>
+
+            <!-- KPI List -->
+            <div class="mb-6">
+              <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold text-gray-800">📋 Grant KPIs</h3>
+                <span class="text-sm text-gray-600">{grantKPIs.length} KPI{grantKPIs.length !== 1 ? 's' : ''} defined</span>
+              </div>
+
+              {#if grantKPIs.length === 0}
+                <div class="text-center py-8 border-2 border-dashed border-gray-300 rounded-lg bg-gray-50">
+                  <span class="text-4xl mb-2 block">🎯</span>
+                  <p class="text-gray-600 mb-2">No KPIs defined yet</p>
+                  <p class="text-sm text-gray-500">Add your first KPI below or use quick templates above</p>
+                </div>
+              {:else}
+                <div class="space-y-3">
+                  {#each grantKPIs as kpi, i}
+                    <div class="border border-gray-200 rounded-lg p-4 bg-white">
+                      <div class="grid grid-cols-1 md:grid-cols-6 gap-4">
+                        <div class="md:col-span-2">
+                          <label class="block text-xs font-medium text-gray-700 mb-1">KPI Name *</label>
+                          <input
+                            type="text"
+                            placeholder="e.g., Publications"
+                            class="w-full px-3 py-2 border {fieldError(`kpi_${i}_name`) ? 'border-red-500' : 'border-gray-300'} rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            value={kpi.name}
+                            on:input={(e) => updateKPI(i, 'name', e.target.value)}
+                          />
+                          {#if fieldError(`kpi_${i}_name`)}
+                            <p class="mt-1 text-xs text-red-600">{fieldError(`kpi_${i}_name`)}</p>
+                          {/if}
+                        </div>
+
+                        <div>
+                          <label class="block text-xs font-medium text-gray-700 mb-1">Unit *</label>
+                          <select
+                            class="w-full px-3 py-2 border {fieldError(`kpi_${i}_unit`) ? 'border-red-500' : 'border-gray-300'} rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            value={kpi.unit}
+                            on:change={(e) => updateKPI(i, 'unit', e.target.value)}
+                          >
+                            <option value="count">Count</option>
+                            <option value="percentage">Percentage</option>
+                            <option value="currency">Currency</option>
+                            <option value="papers">Papers</option>
+                            <option value="students">Students</option>
+                            <option value="people">People</option>
+                            <option value="items">Items</option>
+                            <option value="sessions">Sessions</option>
+                            <option value="datasets">Datasets</option>
+                            <option value="briefs">Briefs</option>
+                            <option value="partnerships">Partnerships</option>
+                          </select>
+                          {#if fieldError(`kpi_${i}_unit`)}
+                            <p class="mt-1 text-xs text-red-600">{fieldError(`kpi_${i}_unit`)}</p>
+                          {/if}
+                        </div>
+
+                        <div>
+                          <label class="block text-xs font-medium text-gray-700 mb-1">Grant Target *</label>
+                          <input
+                            type="number"
+                            placeholder="100"
+                            min="0"
+                            step="0.01"
+                            class="w-full px-3 py-2 border {fieldError(`kpi_${i}_target`) ? 'border-red-500' : 'border-gray-300'} rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            value={kpi.grant_wide_target}
+                            on:input={(e) => updateKPI(i, 'grant_wide_target', e.target.value)}
+                          />
+                          {#if fieldError(`kpi_${i}_target`)}
+                            <p class="mt-1 text-xs text-red-600">{fieldError(`kpi_${i}_target`)}</p>
+                          {/if}
+                        </div>
+
+                        <div>
+                          <label class="block text-xs font-medium text-gray-700 mb-1">Category</label>
+                          <select
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            value={kpi.category}
+                            on:change={(e) => updateKPI(i, 'category', e.target.value)}
+                          >
+                            <option value="research">Research</option>
+                            <option value="training">Training</option>
+                            <option value="infrastructure">Infrastructure</option>
+                            <option value="community">Community</option>
+                            <option value="financial">Financial</option>
+                          </select>
+                        </div>
+
+                        <div>
+                          <label class="block text-xs font-medium text-gray-700 mb-1">Baseline</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            min="0"
+                            step="0.01"
+                            class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            value={kpi.baseline_value}
+                            on:input={(e) => updateKPI(i, 'baseline_value', e.target.value)}
+                          />
+                        </div>
+                      </div>
+
+                      <div class="mt-3">
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Description</label>
+                        <textarea
+                          placeholder="Brief description of this KPI and how it will be measured"
+                          class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          rows="2"
+                          value={kpi.description}
+                          on:input={(e) => updateKPI(i, 'description', e.target.value)}
+                        ></textarea>
+                      </div>
+
+                      <div class="mt-3 flex justify-end">
+                        <button
+                          type="button"
+                          on:click={() => removeKPI(i)}
+                          class="px-3 py-1 bg-red-100 text-red-700 rounded-md hover:bg-red-200 text-sm font-medium"
+                        >
+                          Remove KPI
+                        </button>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+
+              {#if fieldError('grantKPIs')}
+                <p class="mt-2 text-sm text-red-600">{fieldError('grantKPIs')}</p>
+              {/if}
+            </div>
+
+            <!-- Add New KPI -->
+            <div class="border-t pt-6">
+              <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold text-gray-800">➕ Add New KPI</h3>
+                <button
+                  type="button"
+                  on:click={() => showAddKPI = !showAddKPI}
+                  class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+                >
+                  {showAddKPI ? 'Cancel' : 'Add KPI'}
+                </button>
+              </div>
+
+              {#if showAddKPI}
+                <div class="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 mb-1">Quick Templates</label>
+                      <div class="grid grid-cols-2 gap-2">
+                        {#each KPI_TEMPLATES.slice(0, 4) as template}
+                          <button
+                            type="button"
+                            on:click={() => applyTemplate(template)}
+                            class="px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 text-xs"
+                          >
+                            {template.name}
+                          </button>
+                        {/each}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 mb-1">KPI Name *</label>
+                      <input
+                        type="text"
+                        placeholder="e.g., Publications"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        bind:value={newKPI.name}
+                      />
+                    </div>
+
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 mb-1">Unit *</label>
+                      <select
+                        class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        bind:value={newKPI.unit}
+                      >
+                        <option value="count">Count</option>
+                        <option value="percentage">Percentage</option>
+                        <option value="currency">Currency</option>
+                        <option value="papers">Papers</option>
+                        <option value="students">Students</option>
+                        <option value="people">People</option>
+                        <option value="items">Items</option>
+                        <option value="sessions">Sessions</option>
+                        <option value="datasets">Datasets</option>
+                        <option value="briefs">Briefs</option>
+                        <option value="partnerships">Partnerships</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 mb-1">Grant Target *</label>
+                      <input
+                        type="number"
+                        placeholder="100"
+                        min="0"
+                        step="0.01"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        bind:value={newKPI.grant_wide_target}
+                      />
+                    </div>
+
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                      <select
+                        class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        bind:value={newKPI.category}
+                      >
+                        <option value="research">Research</option>
+                        <option value="training">Training</option>
+                        <option value="infrastructure">Infrastructure</option>
+                        <option value="community">Community</option>
+                        <option value="financial">Financial</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div class="mt-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                    <textarea
+                      placeholder="Brief description of this KPI and how it will be measured"
+                      class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      rows="3"
+                      bind:value={newKPI.description}
+                    ></textarea>
+                  </div>
+
+                  <div class="mt-4 flex justify-end">
+                    <button
+                      type="button"
+                      on:click={addKPI}
+                      disabled={!newKPI.name || !newKPI.grant_wide_target}
+                      class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Add KPI
+                    </button>
+                  </div>
+                </div>
+              {/if}
+            </div>
+
+            <!-- Info Box -->
+            <div class="mt-6 bg-blue-50 border border-blue-200 rounded-xl p-4">
+              <div class="flex gap-3">
+                <span class="text-2xl">💡</span>
+                <div class="text-sm text-blue-900">
+                  <strong class="block mb-2">Why Define KPIs Now?</strong>
+                  <ul class="list-disc list-inside space-y-1 text-blue-800">
+                    <li>KPIs become part of your contractual agreement with the funder</li>
+                    <li>They provide clear targets for milestone allocation and tracking</li>
+                    <li>Enables automatic progress calculation and reporting</li>
+                    <li>Ensures accountability and audit compliance throughout the project</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Step 8: Review & Submit -->
+        {#if currentStep === 8}
           <div class="bg-white/80 backdrop-blur-xl border border-white/40 rounded-2xl shadow-lg p-8">
             <div class="border-l-4 border-blue-600 pl-4 mb-6">
               <h2 class="text-2xl font-bold text-gray-900">Review & Submit</h2>
@@ -1805,6 +2750,27 @@
                   </div>
                 </div>
               {/if}
+
+              <!-- KPI Summary -->
+              {#if grantKPIs.length > 0}
+                <div>
+                  <h3 class="text-lg font-semibold text-gray-900 mb-3">Key Performance Indicators</h3>
+                  <div class="space-y-2">
+                    {#each grantKPIs as kpi}
+                      <div class="flex justify-between items-center p-2 bg-gray-50 rounded text-sm">
+                        <div>
+                          <span class="font-medium">{kpi.name}</span>
+                          <span class="text-gray-500 text-xs ml-2">({kpi.category})</span>
+                        </div>
+                        <div class="text-right">
+                          <div class="font-medium">{kpi.grant_wide_target} {kpi.unit}</div>
+                          <div class="text-xs text-gray-500">Target</div>
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
             </div>
           </div>
 
@@ -1844,7 +2810,7 @@
               Cancel
             </button>
 
-            {#if currentStep < 7}
+            {#if currentStep < 8}
               <button
                 type="button"
                 on:click={nextStep}
@@ -1891,4 +2857,121 @@
       </div>
     </div>
   </Layout>
+{/if}
+
+<!-- Milestone KPI Allocation Modal -->
+{#if showMilestoneKPIAllocation && selectedMilestoneIndex !== null}
+  <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+      <div class="border-b border-gray-200 p-6">
+        <div class="flex justify-between items-start">
+          <div>
+            <h3 class="text-lg font-semibold text-gray-900">KPI Allocation - {milestones[selectedMilestoneIndex]?.title || 'Milestone ' + (selectedMilestoneIndex + 1)}</h3>
+            <p class="text-sm text-gray-600 mt-1">Allocate grant KPIs to this milestone with specific targets</p>
+          </div>
+          <button
+            type="button"
+            on:click={closeMilestoneKPIAllocation}
+            class="text-gray-400 hover:text-gray-600 text-xl"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+
+      <div class="p-6">
+        {#if milestones[selectedMilestoneIndex]?.kpiAllocations}
+          <div class="space-y-4">
+            <!-- Auto-distribute button -->
+            <div class="flex justify-between items-center mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <div>
+                <p class="text-sm font-medium text-blue-900">Quick Distribution</p>
+                <p class="text-xs text-blue-700">Distribute KPI targets equally across all milestones</p>
+              </div>
+              <button
+                type="button"
+                on:click={() => autoDistributeKPIs(selectedMilestoneIndex)}
+                class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+              >
+                Auto-Distribute All KPIs
+              </button>
+            </div>
+
+            <!-- KPI Allocation List -->
+            {#each milestones[selectedMilestoneIndex].kpiAllocations as allocation, kpiIndex}
+              <div class="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div class="md:col-span-2">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">KPI Name</label>
+                    <div class="px-3 py-2 bg-white border border-gray-200 rounded-md text-sm">
+                      <span class="font-medium">{allocation.kpiName}</span>
+                      <span class="text-gray-500 text-xs ml-2">({allocation.kpiUnit})</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Milestone Target *</label>
+                    <input
+                      type="number"
+                      placeholder="0"
+                      min="0"
+                      step="0.01"
+                      class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={allocation.milestoneTarget}
+                      on:input={(e) => updateMilestoneKPI(selectedMilestoneIndex, kpiIndex, 'milestoneTarget', e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Allocation %</label>
+                    <div class="px-3 py-2 bg-white border border-gray-200 rounded-md text-sm">
+                      <span class="{allocation.allocationPercentage > 100 ? 'text-red-600' : 'text-gray-900'}">
+                        {allocation.allocationPercentage.toFixed(1)}%
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mt-3">
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Target Notes</label>
+                  <textarea
+                    rows="2"
+                    placeholder="Notes on how this KPI will be measured or achieved for this milestone..."
+                    class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={allocation.notes || ''}
+                    on:input={(e) => updateMilestoneKPI(selectedMilestoneIndex, kpiIndex, 'notes', e.target.value)}
+                  ></textarea>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <div class="text-center py-8">
+            <span class="text-4xl mb-2 block">📊</span>
+            <p class="text-gray-600 mb-2">No KPIs defined yet</p>
+            <p class="text-sm text-gray-500">Please define KPIs in Step 7 first</p>
+          </div>
+        {/if}
+      </div>
+
+      <div class="border-t border-gray-200 p-6">
+        <div class="flex justify-end gap-3">
+          <button
+            type="button"
+            on:click={closeMilestoneKPIAllocation}
+            class="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm font-medium"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            on:click={closeMilestoneKPIAllocation}
+            class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+          >
+            Save Allocations
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 {/if}

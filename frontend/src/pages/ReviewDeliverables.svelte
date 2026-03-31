@@ -13,7 +13,7 @@
 
   onMount(async () => {
     await checkAuth();
-    if (!$isAuthenticated || ($user?.role !== "PI" && $user?.role !== "Team")) {
+    if (!$isAuthenticated || ($user?.role !== "PI" && $user?.role !== "RSU")) {
       router.goToDashboard();
       return;
     }
@@ -26,7 +26,7 @@
     error = "";
     try {
       const response = await axios.get(
-        "/api/deliverables?status=pending",
+        "http://localhost:5000/api/deliverables?status=pending",
         {
           withCredentials: true,
         },
@@ -74,7 +74,7 @@
 
     try {
       await axios.post(
-        `/api/deliverables/${id}/approve`,
+        `http://localhost:5000/api/deliverables/${id}/approve`,
         {},
         { withCredentials: true },
       );
@@ -120,7 +120,7 @@
 
     try {
       await axios.post(
-        `/api/deliverables/${id}/request-revision`,
+        `http://localhost:5000/api/deliverables/${id}/request-revision`,
         { comment },
         { withCredentials: true },
       );
@@ -163,7 +163,11 @@
       >
         <h1 class="text-3xl font-bold text-gray-900">Review Deliverables</h1>
         <p class="text-sm text-gray-600 mt-2">
-          Verify team submissions, enforce compliance, and certify effort.
+          {#if $user?.role === 'RSU'}
+            Review Principal Investigator work for single-PI grant projects. Approve, flag, or request revisions.
+          {:else}
+            Verify team submissions, enforce compliance, and certify effort.
+          {/if}
         </p>
       </div>
 
@@ -199,9 +203,16 @@
                     <p class="text-lg font-semibold text-gray-900">
                       {view.submission.task_title}
                     </p>
-                    <p class="text-sm text-gray-600">
-                      {view.submission.grant_title}
+                    <p class="text-sm text-gray-500">
+                      {view.submission.grant_title} &nbsp;·&nbsp;
+                      {view.submission.team_member}
                     </p>
+                    <!-- PI Self-Submission badge -->
+                    {#if view.submission.is_pi_submission}
+                      <span class="inline-flex items-center gap-1 mt-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-700 border border-purple-200">
+                        🔬 PI Self-Submission — Requires Co-PI/RSU Approval
+                      </span>
+                    {/if}
                   </div>
                   <span
                     class="px-3 py-1 rounded-full bg-amber-50 text-amber-700 text-xs font-semibold"
